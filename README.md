@@ -1,6 +1,6 @@
 # lhcontrol
 
-[**⬇️ Get the latest Windows Installer from Releases**](https://github.com/FlameInTheDark/lhcontrol/releases/latest)
+[**⬇️ Get the latest Windows Installer**](https://github.com/FlameInTheDark/lhcontrol/releases/latest/download/lhcontrol-amd64-installer.exe)
 
 ![Application Screenshot](<./screenshot.png>)
 
@@ -70,7 +70,3 @@ A simple application to control Valve Lighthouse (SteamVR) base stations v2.0 po
 *   **Scanning Issues:** If scans fail after the first time, or interactions fail with errors like "characteristic not found", try removing the base station(s) from your operating system's Bluetooth device list and restarting your computer. Do *not* re-pair them in the OS settings; the application will find them via scanning.
 *   **Bluetooth Drivers:** Ensure you have the latest drivers for your Bluetooth adapter.
 *   **Permissions:** The application might require specific permissions to access Bluetooth hardware.
-
-## License
-
-(Specify your license here, e.g., MIT License)

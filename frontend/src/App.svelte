@@ -7,7 +7,9 @@
     PowerOffStation, // Restore import
     PowerOnAllStations, // Import new function
     PowerOffAllStations, // Import new function
-    RenameStation // Import the new function
+    RenameStation, // Import the new function
+    CheckAllStationStatuses, // Import new function
+    IsScanning             // Import new function
   } from '../wailsjs/go/main/App';
 
   // Interface matching the Go StationInfo struct
@@ -29,6 +31,46 @@
   let editingName: string = '';
   let nameInput: HTMLInputElement;
 
+  let statusCheckInterval: any = null; // Use 'any' to handle Node/browser type differences
+
+  // --- Reactive Sorting --- //
+  $: sortedStations = [...stations].sort((a, b) => a.address.localeCompare(b.address));
+
+  // --- Lifecycle --- //
+  onMount(() => {
+    // Start periodic status check
+    statusCheckInterval = setInterval(periodicStatusCheck, 15000); // 15 seconds
+    // Trigger initial scan after UI mounts
+    handleScanClick();
+  });
+
+  onDestroy(() => {
+    // Clear interval on component destruction
+    if (statusCheckInterval) {
+      clearInterval(statusCheckInterval);
+    }
+  });
+
+  // --- Periodic Status Check --- //
+  async function periodicStatusCheck() {
+    try {
+      const scanning = await IsScanning();
+      // Only check if not scanning, not loading, and not bulk loading
+      if (!scanning && !isLoading && !isBulkLoading) {
+        console.log("Performing periodic status check...");
+        const currentList = await CheckAllStationStatuses();
+        stations = currentList || [];
+        // Update status message gently?
+        // statusMessage = "Checked statuses."; // Maybe too noisy
+      } else {
+        console.log("Skipping periodic status check (scan/operation active).");
+      }
+    } catch (error) {
+      console.error("Error during periodic status check:", error);
+      // statusMessage = `Error during status check: ${error}`; // Can be noisy
+    }
+  }
+
   // Handles the Scan button click
   async function handleScanClick() {
     if (isLoading || isBulkLoading) return;
@@ -42,7 +84,7 @@
     try {
       // Call the backend method (which now returns the full persistent list)
       const result = await ScanAndFetchStations();
-      stations = result || []; // Assign the full updated list from the backend
+      stations = result || []; // Assign to original `stations` array
       if (stations.length > 0) {
         statusMessage = `Scan complete. ${stations.length} station(s) known.`;
       } else {
@@ -65,7 +107,7 @@
        cancelRename();
        try {
            const currentList = await GetCurrentStationInfo();
-           stations = currentList || [];
+           stations = currentList || []; // Assign to original `stations` array
            console.log("Refreshed list after operation.");
        } catch (error) {
            console.error("Error fetching list after operation:", error);
@@ -87,7 +129,7 @@
     isLoading = true; // Prevent scanning during toggle
     statusMessage = `Attempting to turn ${station.name} ${targetState}...`; // Restore original message
     operationInProgress = { ...operationInProgress, [station.address]: true };
-    stations = [...stations];
+    stations = [...stations]; // Trigger reactivity for the list itself
 
     try {
       // Restore original logic for calling PowerOn/PowerOff
@@ -103,7 +145,7 @@
       console.error(`Error toggling power for ${station.name}:`, error);
     } finally {
        operationInProgress = { ...operationInProgress, [station.address]: false };
-       stations = [...stations];
+       stations = [...stations]; // Trigger reactivity
        isLoading = false; // Reset loading after toggle attempt completes
     }
   }
@@ -255,10 +297,10 @@
      </button>
   </div>
 
-  {#if stations.length > 0}
+  {#if sortedStations.length > 0}
       <h2>Discovered Base Stations</h2>
       <ul class="station-list">
-        {#each stations as station (station.address)}
+        {#each sortedStations as station (station.address)}
           <li 
             class="station-item"
             class:power-state-on={station.powerState === 1}

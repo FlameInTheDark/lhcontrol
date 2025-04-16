@@ -36,16 +36,34 @@ type BaseStation struct {
 	Name       string
 	Address    bluetooth.Address
 	PowerState int
-	// Re-add fields for storing handles
-	device         *bluetooth.Device
+	// Fields for storing handles and state
+	device         *bluetooth.Device // Correct type
 	characteristic *bluetooth.DeviceCharacteristic
 	isConnected    bool
+	// Add Mutex for thread-safe access
+	mutex           sync.RWMutex
+	LastStateUpdate time.Time // Track when state was last read
 }
 
-// IsConnected returns the current connection status of the base station.
-// Re-add this getter method.
+// IsConnected returns the current connection status safely.
 func (bs *BaseStation) IsConnected() bool {
-	return bs.isConnected
+	bs.mutex.RLock()
+	defer bs.mutex.RUnlock()
+	return bs.isConnected && bs.device != nil
+}
+
+// setPowerStateInternal updates the power state and timestamp safely.
+// Assumes caller holds the write lock (bs.mutex.Lock()).
+func (bs *BaseStation) setPowerStateInternal(state int) {
+	bs.PowerState = state
+	bs.LastStateUpdate = time.Now()
+}
+
+// GetPowerState reads the power state safely.
+func (bs *BaseStation) GetPowerState() int {
+	bs.mutex.RLock()
+	defer bs.mutex.RUnlock()
+	return bs.PowerState
 }
 
 // Initialize sets up the Bluetooth adapter and parses UUIDs.
@@ -95,7 +113,6 @@ func ScanForDuration(duration time.Duration) ([]BaseStation, error) {
 			Name:       result.LocalName(),
 			Address:    result.Address,
 			PowerState: PowerStateUnknown,
-			// device, characteristic, and isConnected are initially nil/false
 		}
 		localMutex.Unlock()
 	}
@@ -136,274 +153,247 @@ func ScanForDuration(duration time.Duration) ([]BaseStation, error) {
 	return results, nil
 }
 
-// FetchInitialPowerState attempts to retrieve the current power state of a station ONCE.
-// It calls tryFetchPowerStateAttempt and updates the station pointer.
-func FetchInitialPowerState(station *BaseStation) {
-	log.Printf("[BT] FetchState: Starting single attempt for %s (%s)...", station.Name, station.Address.String())
-
-	// Update to handle error return
-	success, newState, err := tryFetchPowerStateAttempt(station)
-	if success {
-		log.Printf("[BT] FetchState: Success for %s. State: %d", station.Name, newState)
-		station.PowerState = newState
-	} else {
-		if err != nil {
-			log.Printf("[BT] FetchState: Failed single attempt for %s: %v. State remains Unknown.", station.Name, err)
-		} else {
-			log.Printf("[BT] FetchState: Failed single attempt for %s (no specific error). State remains Unknown.", station.Name)
-		}
-		station.PowerState = PowerStateUnknown
-	}
-}
-
-// tryFetchPowerStateAttempt contains the logic for a single attempt to fetch the power state.
-// On success, it stores the device and characteristic handles in the station struct,
-// adds station to tracking list, and LEAVES THE CONNECTION OPEN.
-// Returns success (bool), read state (int), and error.
-func tryFetchPowerStateAttempt(station *BaseStation) (bool, int, error) {
-	// --- Disconnect first if already connected (safety check) ---
-	if station.isConnected && station.device != nil {
-		log.Printf("[BT] tryFetchAttempt: WARN - Station %s already connected? Disconnecting first.", station.Name)
-		DisconnectStation(station)
-		time.Sleep(500 * time.Millisecond)
+// readPowerStateInternal performs the actual read and update.
+// Assumes caller holds the write lock (station.mutex.Lock()).
+func readPowerStateInternal(station *BaseStation) error {
+	if station.characteristic == nil {
+		return fmt.Errorf("power characteristic is nil for %s", station.Name)
 	}
 
-	address := station.Address
-	addressString := station.Address.String()
-	if addressString == "" || addressString == "00:00:00:00:00:00" {
-		return false, PowerStateUnknown, fmt.Errorf("invalid address '%s' for %s", addressString, station.Name)
-	}
-
-	// --- Delay Before Connecting ---
-	log.Printf("[BT] tryFetchAttempt: Waiting 500ms before connecting to %s...", station.Name)
-	time.Sleep(500 * time.Millisecond)
-
-	// --- Connection ---
-	log.Printf("[BT] tryFetchAttempt: Connecting to %s...", station.Name)
-	device, connectErr := adapter.Connect(address, bluetooth.ConnectionParams{})
-	if connectErr != nil {
-		return false, PowerStateUnknown, fmt.Errorf("failed to connect: %w", connectErr)
-	}
-	log.Printf("[BT] tryFetchAttempt: Connected to %s.", station.Name)
-
-	// *** REMOVED defer device.Disconnect() AGAIN - Keep connection open on success ***
-
-	// --- Service Discovery (Targeted) ---
-	log.Printf("[BT] tryFetchAttempt: Discovering service %s for %s...", powerControlServiceUUIDString, station.Name)
-	services, err := device.DiscoverServices([]bluetooth.UUID{powerControlServiceUUID})
+	log.Printf("Bluetooth: Reading power state for %s (%s)", station.Name, station.Address)
+	buf := make([]byte, 1)
+	n, err := station.characteristic.Read(buf)
 	if err != nil {
-		log.Printf("[BT] tryFetchAttempt: Failed discover target service for %s: %v. Disconnecting.", station.Name, err)
-		device.Disconnect() // Disconnect on error
-		return false, PowerStateUnknown, fmt.Errorf("failed discover target service: %w", err)
+		station.setPowerStateInternal(PowerStateUnknown) // Use helper
+		return fmt.Errorf("failed to read power characteristic for %s: %w", station.Name, err)
 	}
-	if len(services) == 0 {
-		log.Printf("[BT] tryFetchAttempt: Target service %s not found on %s. Disconnecting.", powerControlServiceUUIDString, station.Name)
-		device.Disconnect() // Disconnect on error
-		return false, PowerStateUnknown, fmt.Errorf("target service %s not found", powerControlServiceUUIDString)
-	}
-	powerService := services[0]
-	log.Printf("[BT] tryFetchAttempt: Found power service for %s.", station.Name)
-
-	// --- Characteristic Discovery (Targeted) ---
-	log.Printf("[BT] tryFetchAttempt: Discovering characteristic %s for %s...", powerControlCharacteristicUUIDString, station.Name)
-	chars, err := powerService.DiscoverCharacteristics([]bluetooth.UUID{powerControlCharacteristicUUID})
-	if err != nil {
-		log.Printf("[BT] tryFetchAttempt: Failed discover target characteristic for %s: %v. Disconnecting.", station.Name, err)
-		device.Disconnect() // Disconnect on error
-		return false, PowerStateUnknown, fmt.Errorf("failed discover target characteristic: %w", err)
-	}
-	if len(chars) == 0 {
-		log.Printf("[BT] tryFetchAttempt: Target characteristic %s not found in service for %s. Disconnecting.", powerControlCharacteristicUUIDString, station.Name)
-		device.Disconnect() // Disconnect on error
-		return false, PowerStateUnknown, fmt.Errorf("target characteristic %s not found in service", powerControlCharacteristicUUIDString)
-	}
-	powerChar := chars[0]
-	log.Printf("[BT] tryFetchAttempt: Found power characteristic for %s.", station.Name)
-
-	// --- Read Value ---
-	log.Printf("[BT] tryFetchAttempt: Reading characteristic for %s...", station.Name)
-	readValue := make([]byte, 1)
-	nRead, errRead := powerChar.Read(readValue)
-	if errRead != nil {
-		log.Printf("[BT] tryFetchAttempt: Failed read characteristic for %s: %v. Disconnecting.", station.Name, errRead)
-		device.Disconnect() // Disconnect on error
-		return false, PowerStateUnknown, fmt.Errorf("failed read characteristic: %w", errRead)
-	}
-	if nRead > 0 {
-		currentState := int(readValue[0])
-		newState := PowerStateUnknown
-		isOk := false
-		if currentState == PowerStateOn || currentState == 0x0B {
-			newState = PowerStateOn
-			isOk = true
-		} else if currentState == PowerStateOff {
-			newState = PowerStateOff
-			isOk = true
-		}
-
-		if isOk {
-			log.Printf("[BT] tryFetchAttempt: Successfully read state 0x%X (mapped to ON) for %s.", readValue[0], station.Name)
-			// STORE HANDLES & TRACK
-			station.device = &device
-			station.characteristic = &powerChar
-			station.isConnected = true
-			connectedStationsMutex.Lock()
-			// Avoid double-adding
-			found := false
-			for _, s := range connectedStations {
-				if s.Address.String() == station.Address.String() {
-					found = true
-					break
-				}
-			}
-			if !found {
-				connectedStations = append(connectedStations, station)
-			}
-			connectedStationsMutex.Unlock()
-			return true, newState, nil // Return standard ON state
-		} else {
-			errUnexpected := fmt.Errorf("read unexpected state 0x%X", currentState)
-			log.Printf("[BT] tryFetchAttempt: %v for %s. Treating as Unknown. Disconnecting.", errUnexpected, station.Name)
-			device.Disconnect() // Disconnect on error
-			return false, PowerStateUnknown, errUnexpected
-		}
-	} else {
-		errReadZero := fmt.Errorf("read 0 bytes from characteristic")
-		log.Printf("[BT] tryFetchAttempt: %v for %s. Disconnecting.", errReadZero, station.Name)
-		device.Disconnect() // Disconnect on error
-		return false, PowerStateUnknown, errReadZero
-	}
-}
-
-// SetPowerState uses the stored characteristic handle (if available) to write the target command.
-func SetPowerState(station *BaseStation, targetCommand byte) error {
-	targetStateStr := "UNKNOWN"
-	targetStateInt := PowerStateUnknown
-	if targetCommand == 0x00 {
-		targetStateStr = "OFF (0x00)"
-		targetStateInt = PowerStateOff
-	} else if targetCommand == 0x01 {
-		targetStateStr = "ON (0x01)"
-		targetStateInt = PowerStateOn
-	} else {
-		return fmt.Errorf("[BT] SetPowerState: Invalid target command byte 0x%X for %s", targetCommand, station.Name)
-	}
-	log.Printf("[BT] SetPowerState: Attempting %s for %s (%s) using stored handles...", targetStateStr, station.Name, station.Address.String())
-
-	// --- Check if handles are valid --- //
-	if !station.isConnected || station.characteristic == nil || station.device == nil {
-		log.Printf("[BT] SetPowerState: Station %s is not connected or handles are missing. Cannot set state.", station.Name)
-		return fmt.Errorf("station %s not initialized or connection lost", station.Name)
-	}
-
-	// --- Use stored characteristic directly --- //
-	powerChar := station.characteristic // Use the stored pointer
-	log.Printf("[BT] SetPowerState: Writing target state (%s) to stored characteristic for %s...", targetStateStr, station.Name)
-	n, err := powerChar.Write([]byte{targetCommand})
-
-	// --- Handle Write Result --- //
-	if err != nil {
-		// Assume connection is lost on write error
-		log.Printf("[BT] SetPowerState: FAILED Write command (%s) to %s: %v. Assuming connection lost.", targetStateStr, station.Name, err)
-
-		// Perform disconnect and cleanup
-		log.Printf("[BT] SetPowerState: Cleaning up connection state for %s due to write error...", station.Name)
-		// Attempt disconnect (ignore error, best effort)
-		if station.device != nil {
-			_ = station.device.Disconnect()
-		}
-		// Clear handles and state
-		station.isConnected = false
-		station.device = nil
-		station.characteristic = nil
-		station.PowerState = PowerStateUnknown // Set state to Unknown on error
-
-		// Remove from tracking list
-		connectedStationsMutex.Lock()
-		newConnectedList := make([]*BaseStation, 0, len(connectedStations))
-		for _, s := range connectedStations {
-			if s.Address.String() != station.Address.String() {
-				newConnectedList = append(newConnectedList, s)
-			}
-		}
-		connectedStations = newConnectedList
-		log.Printf("[BT] SetPowerState: Removed %s from connected list after write error.", station.Name)
-		connectedStationsMutex.Unlock()
-
-		return fmt.Errorf("failed Write command (%s) to %s (connection likely lost): %w", targetStateStr, station.Name, err)
-	}
-
 	if n != 1 {
-		log.Printf("[BT] SetPowerState: Incorrect byte count on write (%d != 1) for %s.", n, station.Name)
-		// Consider if this also implies connection loss or just a bad write?
-		// For now, just return error, don't necessarily disconnect.
-		return fmt.Errorf("failed Write command (%s) to %s: wrote %d bytes, expected 1", targetStateStr, station.Name, n)
+		station.setPowerStateInternal(PowerStateUnknown) // Use helper
+		return fmt.Errorf("unexpected bytes read (%d) for power on %s", n, station.Name)
 	}
 
-	// --- Success --- //
-	log.Printf("[BT] SetPowerState: Write successful (%s) for %s.", targetStateStr, station.Name)
-	station.PowerState = targetStateInt // Update state in memory only on success
+	newState := int(buf[0])
+	// Treat 0 as Off, anything else as On
+	if newState != PowerStateOff {
+		log.Printf("Bluetooth: Read non-zero state 0x%X for %s. Treating as ON.", buf[0], station.Name)
+		newState = PowerStateOn
+	}
+	// No need to explicitly check for 1 anymore, and remove warning for other values
+
+	if station.PowerState != newState { // Check before logging
+		log.Printf("Bluetooth: Power state for %s changed from %d to %d", station.Name, station.PowerState, newState)
+	}
+	station.setPowerStateInternal(newState) // Use helper
+
 	return nil
 }
 
-// PowerOn ensures the base station is powered on.
-func PowerOn(station *BaseStation) error {
-	return SetPowerState(station, byte(PowerStateOn))
-}
+// ReadPowerState attempts to read the current power state for an already connected station.
+func ReadPowerState(station *BaseStation) error {
+	if station == nil {
+		return fmt.Errorf("station is nil")
+	}
 
-// PowerOff ensures the base station is powered off.
-func PowerOff(station *BaseStation) error {
-	return SetPowerState(station, byte(PowerStateOff))
-}
+	station.mutex.Lock() // Lock for the duration
+	defer station.mutex.Unlock()
 
-// DisconnectStation explicitly disconnects a single station and removes it from tracking.
-func DisconnectStation(station *BaseStation) {
 	if !station.isConnected || station.device == nil {
-		// log.Printf("[BT] DisconnectStation: Station %s is not connected or device is nil.", station.Name)
-		return // Already disconnected or handles are invalid
+		return fmt.Errorf("station %s is not connected", station.Name)
 	}
-	log.Printf("[BT] DisconnectStation: Disconnecting from %s...", station.Name)
-	err := station.device.Disconnect()
+	if station.characteristic == nil {
+		log.Printf("Bluetooth: Error - Power characteristic not found for connected station %s.", station.Name)
+		return fmt.Errorf("power characteristic not cached for %s", station.Name)
+	}
+
+	return readPowerStateInternal(station)
+}
+
+// connectAndDiscoverInternal handles connection and discovery.
+// Assumes caller holds the write lock (station.mutex.Lock()).
+func connectAndDiscoverInternal(station *BaseStation) error {
+	if station.isConnected && station.device != nil && station.characteristic != nil {
+		return nil // Already good
+	}
+
+	if !station.isConnected || station.device == nil {
+		log.Printf("Bluetooth: Internal connect attempt for %s...", station.Name)
+		device, err := adapter.Connect(station.Address, bluetooth.ConnectionParams{})
+		if err != nil {
+			station.isConnected = false
+			station.device = nil
+			station.characteristic = nil
+			station.setPowerStateInternal(PowerStateUnknown)
+			return fmt.Errorf("connection failed internal: %w", err)
+		}
+		station.device = &device // Assign pointer correctly
+		station.isConnected = true
+		log.Printf("Bluetooth: Internal connect successful for %s.", station.Name)
+		connectedStationsMutex.Lock()
+		found := false
+		for _, cs := range connectedStations {
+			if cs.Address == station.Address {
+				found = true
+				break
+			}
+		}
+		if !found {
+			connectedStations = append(connectedStations, station)
+		}
+		connectedStationsMutex.Unlock()
+	}
+
+	if station.characteristic == nil {
+		log.Printf("Bluetooth: Internal discovery attempt for %s...", station.Name)
+		services, err := station.device.DiscoverServices([]bluetooth.UUID{powerControlServiceUUID})
+		if err != nil || len(services) == 0 {
+			disconnectInternal(station)
+			return fmt.Errorf("service discovery failed internal: %v", err)
+		}
+		chars, err := services[0].DiscoverCharacteristics([]bluetooth.UUID{powerControlCharacteristicUUID})
+		if err != nil || len(chars) == 0 {
+			disconnectInternal(station)
+			return fmt.Errorf("characteristic discovery failed internal: %v", err)
+		}
+		station.characteristic = &chars[0]
+		log.Printf("Bluetooth: Internal discovery successful for %s.", station.Name)
+	}
+	return nil
+}
+
+// FetchInitialPowerState attempts to connect (if necessary) and read the initial power state.
+func FetchInitialPowerState(station *BaseStation) error {
+	if station == nil {
+		return fmt.Errorf("station is nil")
+	}
+
+	station.mutex.Lock() // Lock for the whole operation
+	defer station.mutex.Unlock()
+
+	err := connectAndDiscoverInternal(station)
 	if err != nil {
-		log.Printf("[BT] DisconnectStation: Error disconnecting from %s: %v", station.Name, err)
+		log.Printf("Bluetooth: Failed to connect/discover in FetchInitialPowerState for %s: %v", station.Name, err)
+		return err
 	}
 
-	// Clear handles and state regardless of disconnect error
-	station.isConnected = false
-	station.device = nil
-	station.characteristic = nil
-	// Don't reset PowerState here, keep last known state
+	log.Printf("Bluetooth: FetchInitialPowerState proceeding to read state for %s.", station.Name)
+	err = readPowerStateInternal(station)
+	if err != nil {
+		log.Printf("Bluetooth: Failed to read state in FetchInitialPowerState for %s: %v", station.Name, err)
+		return err
+	}
 
-	// Remove from tracked list
+	log.Printf("Bluetooth: FetchInitialPowerState successful for %s. State: %d", station.Name, station.PowerState)
+	return nil
+}
+
+// PowerOn attempts to turn the base station on.
+func PowerOn(station *BaseStation) error {
+	if station == nil {
+		return fmt.Errorf("station is nil")
+	}
+	station.mutex.Lock()
+	defer station.mutex.Unlock()
+
+	if err := connectAndDiscoverInternal(station); err != nil {
+		return fmt.Errorf("failed to connect/discover before PowerOn: %w", err)
+	}
+
+	log.Printf("Bluetooth: Sending Power ON command to %s using Write", station.Name)
+	// Use standard Write instead of WriteWithoutResponse
+	n, err := station.characteristic.Write([]byte{0x01})
+	if err != nil {
+		disconnectInternal(station)
+		return fmt.Errorf("failed to write Power ON command: %w", err)
+	}
+	if n != 1 {
+		// A successful write should return n=1 for one byte
+		log.Printf("Bluetooth: Warning - wrote %d bytes instead of 1 for Power ON on %s", n, station.Name)
+		// Continue anyway, but log it. Might not be fatal.
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	err = readPowerStateInternal(station)
+	if err != nil {
+		log.Printf("Bluetooth: Failed to read back state after PowerOn for %s: %v (state may be stale)", station.Name, err)
+	}
+	return nil
+}
+
+// PowerOff attempts to turn the base station off.
+func PowerOff(station *BaseStation) error {
+	if station == nil {
+		return fmt.Errorf("station is nil")
+	}
+	station.mutex.Lock()
+	defer station.mutex.Unlock()
+
+	if err := connectAndDiscoverInternal(station); err != nil {
+		return fmt.Errorf("failed to connect/discover before PowerOff: %w", err)
+	}
+
+	log.Printf("Bluetooth: Sending Power OFF command to %s using Write", station.Name)
+	// Use standard Write instead of WriteWithoutResponse
+	n, err := station.characteristic.Write([]byte{0x00})
+	if err != nil {
+		disconnectInternal(station)
+		return fmt.Errorf("failed to write Power OFF command: %w", err)
+	}
+	if n != 1 {
+		log.Printf("Bluetooth: Warning - wrote %d bytes instead of 1 for Power OFF on %s", n, station.Name)
+		// Continue anyway, but log it.
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	err = readPowerStateInternal(station)
+	if err != nil {
+		log.Printf("Bluetooth: Failed to read back state after PowerOff for %s: %v (state may be stale)", station.Name, err)
+	}
+	return nil
+}
+
+// disconnectInternal performs disconnection without locking (must be called within locked context).
+// Also removes station from the global tracking list.
+func disconnectInternal(s *BaseStation) {
+	if s.device != nil {
+		log.Printf("Bluetooth: Disconnecting internal for %s", s.Name)
+		_ = s.device.Disconnect()
+	}
+	s.isConnected = false
+	s.device = nil
+	s.characteristic = nil
+	s.setPowerStateInternal(PowerStateUnknown)
+
 	connectedStationsMutex.Lock()
-	newConnectedList := make([]*BaseStation, 0, len(connectedStations))
-	found := false // To log if it was actually removed
-	for _, s := range connectedStations {
-		if s.Address.String() != station.Address.String() {
-			newConnectedList = append(newConnectedList, s)
-		} else {
-			found = true
+	newConnectedStations := make([]*BaseStation, 0, len(connectedStations))
+	for _, cs := range connectedStations {
+		if cs.Address != s.Address {
+			newConnectedStations = append(newConnectedStations, cs)
 		}
 	}
-	connectedStations = newConnectedList
-	if found {
-		log.Printf("[BT] DisconnectStation: Removed %s from connected list (new size: %d).", station.Name, len(connectedStations))
-	}
+	connectedStations = newConnectedStations
 	connectedStationsMutex.Unlock()
 }
 
-// DisconnectAllStations iterates through the tracked list and disconnects each station.
-// Intended for application shutdown.
+// DisconnectStation disconnects from a specific base station.
+func DisconnectStation(station *BaseStation) {
+	if station == nil {
+		return
+	}
+	station.mutex.Lock() // Lock before calling internal disconnect
+	defer station.mutex.Unlock()
+	disconnectInternal(station) // Use internal helper
+}
+
+// DisconnectAllStations disconnects all tracked stations.
 func DisconnectAllStations() {
 	connectedStationsMutex.Lock()
-	// Create a copy of the list to iterate over, as DisconnectStation modifies the original
+	log.Printf("Bluetooth: Disconnecting all %d tracked stations...", len(connectedStations))
 	stationsToDisconnect := make([]*BaseStation, len(connectedStations))
 	copy(stationsToDisconnect, connectedStations)
-	log.Printf("[BT] DisconnectAllStations: Disconnecting %d tracked stations...", len(stationsToDisconnect))
-	connectedStationsMutex.Unlock() // Unlock before potentially long disconnect loop
+	connectedStationsMutex.Unlock()
 
 	for _, station := range stationsToDisconnect {
-		DisconnectStation(station) // This will lock/unlock the mutex internally
+		DisconnectStation(station)
 	}
-	log.Println("[BT] DisconnectAllStations: Finished.")
+	log.Println("Bluetooth: Disconnect all stations attempt finished.")
 }

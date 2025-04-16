@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -47,6 +48,20 @@ func NewApp() *App {
 	}
 }
 
+// Helper function to get the full path to the config file
+func getConfigPath() (string, error) {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get user config dir: %w", err)
+	}
+	appConfigDir := filepath.Join(configDir, "lhcontrol")
+	err = os.MkdirAll(appConfigDir, 0755) // Ensure the directory exists
+	if err != nil {
+		return "", fmt.Errorf("failed to create app config dir '%s': %w", appConfigDir, err)
+	}
+	return filepath.Join(appConfigDir, "config.json"), nil
+}
+
 // startup is called when the app starts.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
@@ -57,15 +72,23 @@ func (a *App) startup(ctx context.Context) {
 
 	a.config.RenamedStations = make(map[string]string)
 
-	// Load renamed stations from file
-	configFile, err := os.ReadFile("config.json")
+	// Load renamed stations from file in config directory
+	configFilePath, err := getConfigPath()
 	if err != nil {
-		log.Printf("Error reading config file: %v", err)
-	}
-
-	err = json.Unmarshal(configFile, &a.config)
-	if err != nil {
-		log.Printf("Error unmarshalling config: %v", err)
+		log.Printf("Error getting config file path: %v", err)
+	} else {
+		log.Printf("Loading config from: %s", configFilePath)
+		configFile, err := os.ReadFile(configFilePath)
+		if err != nil {
+			if !os.IsNotExist(err) { // Log error only if it's not 'file not found'
+				log.Printf("Error reading config file '%s': %v", configFilePath, err)
+			}
+		} else {
+			err = json.Unmarshal(configFile, &a.config)
+			if err != nil {
+				log.Printf("Error unmarshalling config: %v", err)
+			}
+		}
 	}
 
 	a.api.Post("/allon", func(c *fiber.Ctx) error {
@@ -314,11 +337,17 @@ func (a *App) RenameStation(originalName string, newName string) error {
 }
 
 func (a *App) SaveConfig() error {
-	configFile, err := json.Marshal(a.config)
+	configFilePath, err := getConfigPath()
+	if err != nil {
+		return fmt.Errorf("failed to get config path for saving: %w", err)
+	}
+
+	configFile, err := json.MarshalIndent(a.config, "", "  ") // Use MarshalIndent for readability
 	if err != nil {
 		return fmt.Errorf("error marshalling config: %w", err)
 	}
-	return os.WriteFile("config.json", configFile, 0644)
+	log.Printf("Saving config to: %s", configFilePath)
+	return os.WriteFile(configFilePath, configFile, 0644)
 }
 
 // shutdown is called when the app terminates.

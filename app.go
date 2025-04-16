@@ -13,7 +13,6 @@ import (
 	"lhcontrol/internal/bluetooth"
 
 	"github.com/gofiber/fiber/v2"
-	// "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // StationInfo is a simplified representation of a BaseStation for the frontend.
@@ -49,7 +48,7 @@ func NewApp() *App {
 }
 
 // Helper function to get the full path to the config file
-func getConfigPath() (string, error) {
+func getConfigPathForConfig() (string, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get user config dir: %w", err)
@@ -65,18 +64,23 @@ func getConfigPath() (string, error) {
 // startup is called when the app starts.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+
+	// Use standard logger (already configured in main)
+	log.Println("-----------------------------------------")
+	log.Println("Application startup initiated.")
+	log.Println("-----------------------------------------")
+
 	err := bluetooth.Initialize()
 	if err != nil {
 		log.Printf("Error initializing Bluetooth: %v", err)
-		// Optionally: Decide if this is fatal or just warn the user
 	}
 
 	a.config.RenamedStations = make(map[string]string)
 
 	// Load renamed stations from file in config directory
-	configFilePath, err := getConfigPath()
-	if err != nil {
-		log.Printf("Error getting config file path: %v", err)
+	configFilePath, errCfgPath := getConfigPathForConfig()
+	if errCfgPath != nil {
+		log.Printf("Error getting config file path: %v", errCfgPath)
 	} else {
 		log.Printf("Loading config from: %s", configFilePath)
 		configFile, err := os.ReadFile(configFilePath)
@@ -110,7 +114,7 @@ func (a *App) startup(ctx context.Context) {
 		}
 	}()
 
-	// REMOVED automatic initial scan - will be triggered by UI
+	log.Println("Startup sequence complete.")
 }
 
 // --- Bluetooth Methods --- //
@@ -121,7 +125,7 @@ func (a *App) ScanAndFetchStations() ([]StationInfo, error) {
 	a.stationsMutex.Lock() // Lock to modify isScanning
 	if a.isScanning {
 		a.stationsMutex.Unlock()
-		log.Println("App: Scan already in progress. Ignoring request.")
+		log.Println("Scan already in progress. Ignoring request.")
 		return a.GetCurrentStationInfo(), fmt.Errorf("scan already in progress")
 	}
 	a.isScanning = true
@@ -131,45 +135,45 @@ func (a *App) ScanAndFetchStations() ([]StationInfo, error) {
 	defer func() {
 		a.stationsMutex.Lock()
 		a.isScanning = false
-		log.Println("App: ScanAndFetchStations completed, isScanning set to false.")
+		log.Println("ScanAndFetchStations completed, isScanning set to false.")
 		a.stationsMutex.Unlock()
 	}()
 
 	scanDuration := 5 * time.Second
 	fetchWaitDuration := 7 * time.Second // Time to wait for FetchInitialPowerState goroutines
 
-	log.Println("App: Adding 1s delay before starting scan...")
+	log.Println("Adding 1s delay before starting scan...")
 	time.Sleep(1 * time.Second)
 
-	log.Printf("App: Starting blocking scan for %v...", scanDuration)
+	log.Printf("Starting blocking scan for %v...", scanDuration)
 	discoveredValues, err := bluetooth.ScanForDuration(scanDuration)
 	if err != nil {
-		log.Printf("App: Error during blocking scan: %v", err)
+		log.Printf("Error during blocking scan: %v", err)
 		// Don't clear the map on scan error
 		return a.GetCurrentStationInfo(), fmt.Errorf("bluetooth scan failed: %w", err)
 	}
-	log.Printf("App: Blocking scan finished, found %d devices in this scan.", len(discoveredValues))
+	log.Printf("Blocking scan finished, found %d devices in this scan.", len(discoveredValues))
 
 	// --- Update persistent map and identify stations to fetch state for --- //
 	stationsToFetch := make([]*bluetooth.BaseStation, 0, len(discoveredValues))
 	a.stationsMutex.Lock() // Lock map for updates
-	log.Printf("App: Updating persistent station map...")
+	log.Println("Updating persistent station map...")
 	for _, currentScanStation := range discoveredValues {
 		addrStr := currentScanStation.Address.String()
 		if existingStation, found := a.stations[addrStr]; found {
 			// Station already exists, update name if needed
 			if existingStation.Name != currentScanStation.Name {
-				log.Printf("App: Updating name for %s from %s to %s", addrStr, existingStation.Name, currentScanStation.Name)
+				log.Printf("Updating name for %s from %s to %s", addrStr, existingStation.Name, currentScanStation.Name)
 				existingStation.Name = currentScanStation.Name
 			}
 			// Check if we need to fetch state (if not currently connected)
 			if !existingStation.IsConnected() {
-				log.Printf("App: Existing station %s found, but not connected. Queuing for state fetch.", addrStr)
+				log.Printf("Existing station %s found, but not connected. Queuing for state fetch.", addrStr)
 				stationsToFetch = append(stationsToFetch, existingStation)
 			}
 		} else {
 			// New station found
-			log.Printf("App: Adding new station %s (%s) to map.", currentScanStation.Name, addrStr)
+			log.Printf("Adding new station %s (%s) to map.", currentScanStation.Name, addrStr)
 			newStationPtr := new(bluetooth.BaseStation)
 			*newStationPtr = currentScanStation // Copy data
 			a.stations[addrStr] = newStationPtr
@@ -181,12 +185,15 @@ func (a *App) ScanAndFetchStations() ([]StationInfo, error) {
 	// --- Launch fetch routines for stations needing state check --- //
 	var wg sync.WaitGroup
 	if len(stationsToFetch) > 0 {
-		log.Printf("App: Launching state fetch routines for %d stations...", len(stationsToFetch))
+		log.Printf("Launching state fetch routines for %d stations...", len(stationsToFetch))
 		for _, stationToFetch := range stationsToFetch {
 			wg.Add(1)
 			go func(ptr *bluetooth.BaseStation) {
 				defer wg.Done()
-				bluetooth.FetchInitialPowerState(ptr) // This attempts connection and state read
+				err := bluetooth.FetchInitialPowerState(stationToFetch)
+				if err != nil {
+					log.Printf("App Goroutine: Error fetching state for %s: %v", stationToFetch.Name, err)
+				}
 			}(stationToFetch)
 		}
 
@@ -197,17 +204,17 @@ func (a *App) ScanAndFetchStations() ([]StationInfo, error) {
 			close(waitChan)
 		}()
 
-		log.Printf("App: Waiting up to %v for state fetch routines...", fetchWaitDuration)
+		log.Printf("Waiting up to %v for state fetch routines...", fetchWaitDuration)
 		select {
 		case <-waitChan:
-			log.Println("App: All state fetch routines completed.")
+			log.Println("All state fetch routines completed.")
 		case <-time.After(fetchWaitDuration):
-			log.Printf("App: Warning - Timed out waiting for state fetch routines after %v.", fetchWaitDuration)
+			log.Printf("Warning: Timed out waiting for state fetch routines after %v.", fetchWaitDuration)
 		}
 	}
 
 	// --- Generate result for frontend from the full map --- //
-	log.Println("App: Scan and update process complete. Returning full station info map.")
+	log.Println("Scan and update process complete. Returning full station info map.")
 	return a.GetCurrentStationInfo(), nil
 }
 
@@ -223,12 +230,12 @@ func (a *App) IsScanning() bool {
 func (a *App) CheckAllStationStatuses() ([]StationInfo, error) {
 	statusCheckTimeout := 4 * time.Second // Max time to wait for status checks
 
-	log.Println("App: Starting periodic status check...")
+	log.Println("Starting periodic status check...")
 	stationsToRead := make([]*bluetooth.BaseStation, 0)
 	stationsToFetch := make([]*bluetooth.BaseStation, 0)
 
 	a.stationsMutex.RLock() // Read lock to check connection status
-	log.Printf("App: Checking status of %d known stations.", len(a.stations))
+	log.Printf("Checking status of %d known stations.", len(a.stations))
 	for _, stationPtr := range a.stations {
 		if stationPtr == nil {
 			continue
@@ -242,7 +249,7 @@ func (a *App) CheckAllStationStatuses() ([]StationInfo, error) {
 	a.stationsMutex.RUnlock()
 
 	if len(stationsToRead) == 0 && len(stationsToFetch) == 0 {
-		log.Println("App: No stations known or needing check.")
+		log.Println("No stations known or needing check.")
 		return a.GetCurrentStationInfo(), nil
 	}
 
@@ -251,15 +258,15 @@ func (a *App) CheckAllStationStatuses() ([]StationInfo, error) {
 
 	// Launch routines to *read* already connected stations
 	if len(stationsToRead) > 0 {
-		log.Printf("App: Launching state read routines for %d connected stations...", len(stationsToRead))
+		log.Printf("Launching state read routines for %d connected stations...", len(stationsToRead))
 		for _, stationToRead := range stationsToRead {
 			wg.Add(1)
 			go func(ptr *bluetooth.BaseStation) {
 				defer wg.Done()
-				err := bluetooth.ReadPowerState(ptr)
+				err := bluetooth.ReadPowerState(stationToRead)
 				if err != nil {
 					// Log error, but don't necessarily fail the whole check
-					log.Printf("App: Error reading state for connected station %s: %v", ptr.Name, err)
+					log.Printf("App Goroutine: Error reading state for connected station %s: %v", stationToRead.Name, err)
 				}
 			}(stationToRead)
 		}
@@ -267,15 +274,15 @@ func (a *App) CheckAllStationStatuses() ([]StationInfo, error) {
 
 	// Launch routines to *fetch* (connect & read) disconnected stations
 	if len(stationsToFetch) > 0 {
-		log.Printf("App: Launching state fetch routines for %d disconnected stations...", len(stationsToFetch))
+		log.Printf("Launching state fetch routines for %d disconnected stations...", len(stationsToFetch))
 		for _, stationToFetch := range stationsToFetch {
 			wg.Add(1)
 			go func(ptr *bluetooth.BaseStation) {
 				defer wg.Done()
 				// We only *attempt* to fetch, don't worry about errors here
-				err := bluetooth.FetchInitialPowerState(ptr)
+				err := bluetooth.FetchInitialPowerState(stationToFetch)
 				if err != nil {
-					log.Printf("App: Error fetching state for disconnected station %s: %v", ptr.Name, err)
+					log.Printf("App Goroutine: Error fetching state for disconnected station %s: %v", stationToFetch.Name, err)
 				}
 			}(stationToFetch)
 		}
@@ -288,16 +295,16 @@ func (a *App) CheckAllStationStatuses() ([]StationInfo, error) {
 		close(waitChan)
 	}()
 
-	log.Printf("App: Waiting up to %v for status check routines...", statusCheckTimeout)
+	log.Printf("Waiting up to %v for status check routines...", statusCheckTimeout)
 	select {
 	case <-waitChan:
-		log.Println("App: All status check routines completed.")
+		log.Println("All status check routines completed.")
 	case <-time.After(statusCheckTimeout):
-		log.Printf("App: Warning - Timed out waiting for status check routines after %v.", statusCheckTimeout)
+		log.Printf("Warning: Timed out waiting for status check routines after %v.", statusCheckTimeout)
 	}
 
 	// Return the updated list
-	log.Println("App: Periodic status check complete. Returning current station info.")
+	log.Println("Periodic status check complete. Returning current station info.")
 	return a.GetCurrentStationInfo(), nil
 }
 
@@ -320,10 +327,10 @@ func (a *App) GetCurrentStationInfo() []StationInfo {
 				Name:         name,
 				OriginalName: stationPtr.Name,
 				Address:      stationPtr.Address.String(),
-				PowerState:   stationPtr.PowerState,
+				PowerState:   stationPtr.GetPowerState(),
 			})
 		} else {
-			log.Printf("App: Warning - Nil pointer found in stations map during GetCurrentStationInfo")
+			log.Println("Warning: Nil pointer found in stations map during GetCurrentStationInfo")
 		}
 	}
 	return stationInfos
@@ -343,8 +350,13 @@ func (a *App) PowerOnStation(address string) error {
 	if stationPtr == nil {
 		return fmt.Errorf("station with address %s not found in App map", address)
 	}
-	// Pass the POINTER to the bluetooth function
-	return bluetooth.PowerOn(stationPtr)
+	log.Printf("Requesting Power ON for %s (%s)", stationPtr.Name, address)
+	err := bluetooth.PowerOn(stationPtr)
+	if err != nil {
+		log.Printf("Error in PowerOn for %s: %v", stationPtr.Name, err)
+		return err
+	}
+	return nil
 }
 
 // PowerOffStation turns a specific base station off.
@@ -353,8 +365,13 @@ func (a *App) PowerOffStation(address string) error {
 	if stationPtr == nil {
 		return fmt.Errorf("station with address %s not found in App map", address)
 	}
-	// Pass the POINTER to the bluetooth function
-	return bluetooth.PowerOff(stationPtr)
+	log.Printf("Requesting Power OFF for %s (%s)", stationPtr.Name, address)
+	err := bluetooth.PowerOff(stationPtr)
+	if err != nil {
+		log.Printf("Error in PowerOff for %s: %v", stationPtr.Name, err)
+		return err
+	}
+	return nil
 }
 
 // PowerOnAllStations attempts to turn ON all known base stations concurrently.
@@ -368,7 +385,7 @@ func (a *App) PowerOnAllStations() error {
 	}
 	a.stationsMutex.RUnlock()
 
-	log.Printf("App: Attempting to power ON %d stations...", len(stationsToToggle))
+	log.Printf("Attempting to power ON %d stations...", len(stationsToToggle))
 	var wg sync.WaitGroup
 	errors := make(map[string]error)
 	var errorMutex sync.Mutex
@@ -379,7 +396,7 @@ func (a *App) PowerOnAllStations() error {
 			defer wg.Done()
 			err := bluetooth.PowerOn(s) // Call the existing PowerOn function
 			if err != nil {
-				log.Printf("App: Error powering ON %s: %v", s.Name, err)
+				log.Printf("App Goroutine: Error powering ON %s: %v", s.Name, err)
 				errorMutex.Lock()
 				errors[s.Address.String()] = err
 				errorMutex.Unlock()
@@ -388,7 +405,7 @@ func (a *App) PowerOnAllStations() error {
 	}
 
 	wg.Wait()
-	log.Printf("App: Finished power ON attempts for all stations.")
+	log.Println("Finished power ON attempts for all stations.")
 
 	if len(errors) > 0 {
 		// Combine errors? Or just indicate failure?
@@ -409,7 +426,7 @@ func (a *App) PowerOffAllStations() error {
 	}
 	a.stationsMutex.RUnlock()
 
-	log.Printf("App: Attempting to power OFF %d stations...", len(stationsToToggle))
+	log.Printf("Attempting to power OFF %d stations...", len(stationsToToggle))
 	var wg sync.WaitGroup
 	errors := make(map[string]error)
 	var errorMutex sync.Mutex
@@ -420,7 +437,7 @@ func (a *App) PowerOffAllStations() error {
 			defer wg.Done()
 			err := bluetooth.PowerOff(s) // Call the existing PowerOff function
 			if err != nil {
-				log.Printf("App: Error powering OFF %s: %v", s.Name, err)
+				log.Printf("App Goroutine: Error powering OFF %s: %v", s.Name, err)
 				errorMutex.Lock()
 				errors[s.Address.String()] = err
 				errorMutex.Unlock()
@@ -429,7 +446,7 @@ func (a *App) PowerOffAllStations() error {
 	}
 
 	wg.Wait()
-	log.Printf("App: Finished power OFF attempts for all stations.")
+	log.Println("Finished power OFF attempts for all stations.")
 
 	if len(errors) > 0 {
 		return fmt.Errorf("encountered %d error(s) during PowerOffAllStations", len(errors))
@@ -442,50 +459,50 @@ func (a *App) RenameStation(originalName string, newName string) error {
 	if newName == "" {
 		// If newName is empty, remove the entry from the map to reset
 		delete(a.config.RenamedStations, originalName)
-		log.Printf("App: Resetting custom name for %s", originalName)
+		log.Printf("Resetting custom name for %s", originalName)
 	} else {
 		// Otherwise, save the new name
 		a.config.RenamedStations[originalName] = newName
-		log.Printf("App: Renaming %s to %s", originalName, newName)
+		log.Printf("Renaming %s to %s", originalName, newName)
 	}
 	return a.SaveConfig()
 }
 
 func (a *App) SaveConfig() error {
-	configFilePath, err := getConfigPath()
+	configFilePath, err := getConfigPathForConfig()
 	if err != nil {
+		log.Printf("Failed to get config path for saving: %v", err)
 		return fmt.Errorf("failed to get config path for saving: %w", err)
 	}
 
 	configFile, err := json.MarshalIndent(a.config, "", "  ") // Use MarshalIndent for readability
 	if err != nil {
+		log.Printf("Error marshalling config: %v", err)
 		return fmt.Errorf("error marshalling config: %w", err)
 	}
 	log.Printf("Saving config to: %s", configFilePath)
-	return os.WriteFile(configFilePath, configFile, 0644)
+	err = os.WriteFile(configFilePath, configFile, 0644)
+	if err != nil {
+		log.Printf("Failed to write config file '%s': %v", configFilePath, err)
+		return err
+	}
+	return nil
 }
 
 // shutdown is called when the app terminates.
 // It disconnects any active Bluetooth connections by iterating the map.
 func (a *App) shutdown(ctx context.Context) {
-	log.Println("App: Shutdown requested. Disconnecting all stations...")
-	a.api.Shutdown()
-	a.stationsMutex.Lock() // Lock for iterating
-	stationsToDisconnect := make([]*bluetooth.BaseStation, 0, len(a.stations))
-	for _, stationPtr := range a.stations {
-		if stationPtr != nil && stationPtr.IsConnected() { // Check connection status
-			stationsToDisconnect = append(stationsToDisconnect, stationPtr)
+	log.Println("App shutdown requested. Cleaning up...")
+	if a.api != nil {
+		log.Println("Shutting down API server...")
+		err := a.api.Shutdown()
+		if err != nil {
+			log.Printf("Error shutting down API server: %v", err)
 		}
 	}
-	a.stationsMutex.Unlock() // Unlock before calling disconnect functions
-
-	log.Printf("App: Found %d connected stations to disconnect.", len(stationsToDisconnect))
-	for _, stationPtr := range stationsToDisconnect {
-		log.Printf("App: Requesting disconnect for %s", stationPtr.Name)
-		bluetooth.DisconnectStation(stationPtr)
-	}
-
-	log.Println("App: Disconnect all stations completed.")
+	log.Println("Requesting disconnect for all stations...")
+	bluetooth.DisconnectAllStations() // Assumes this logs internally
+	log.Println("App shutdown sequence complete.")
 }
 
 // Greet (Example method - can be kept or removed)

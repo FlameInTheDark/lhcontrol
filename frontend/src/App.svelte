@@ -1,17 +1,19 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import {
     ScanAndFetchStations,  // Use this new method
     GetCurrentStationInfo, // Restore import
     PowerOnStation,  // Restore import
     PowerOffStation, // Restore import
     PowerOnAllStations, // Import new function
-    PowerOffAllStations // Import new function
+    PowerOffAllStations, // Import new function
+    RenameStation // Import the new function
   } from '../wailsjs/go/main/App';
 
   // Interface matching the Go StationInfo struct
   interface StationInfo {
     name: string;
+    originalName: string; // Add original name
     address: string;
     powerState: number; // -1: Unknown, 0: Off, 1: On
   }
@@ -21,6 +23,11 @@
   let operationInProgress: { [address: string]: boolean } = {}; // Restore state
   let isLoading: boolean = false; // Track if Scan or Toggle is in progress
   let isBulkLoading: boolean = false; // Track if bulk operation is in progress
+
+  // --- Renaming State --- //
+  let editingAddress: string | null = null;
+  let editingName: string = '';
+  let nameInput: HTMLInputElement;
 
   // Handles the Scan button click
   async function handleScanClick() {
@@ -54,6 +61,8 @@
 
   // Restore fetchLatestList function (used by toggle)
   async function fetchLatestList() {
+       // Make sure we cancel any ongoing edit before refreshing
+       cancelRename();
        try {
            const currentList = await GetCurrentStationInfo();
            stations = currentList || [];
@@ -133,6 +142,91 @@
     }
   }
 
+  // --- Renaming Logic --- //
+  async function startRename(station: StationInfo) {
+    if (isLoading || isBulkLoading || operationInProgress[station.address]) return;
+    // Cancel any previous edit
+    cancelRename();
+    editingAddress = station.address;
+    editingName = station.name; // Initialize input with current name
+    // Wait for the DOM to update, then focus the input
+    await tick();
+    nameInput?.focus();
+    nameInput?.select(); // Select text for easy replacement
+  }
+
+  function cancelRename() {
+    editingAddress = null;
+    editingName = '';
+  }
+
+  async function saveRename(station: StationInfo) {
+    const newNameTrimmed = editingName.trim();
+    const addressToUpdate = station.address; // Keep track before cancelling
+    const originalNameToUpdate = station.originalName;
+
+    if (newNameTrimmed === station.name) {
+      // Name hasn't changed
+      cancelRename();
+      return;
+    }
+
+    cancelRename(); // Switch UI back immediately for both empty and non-empty cases
+    isLoading = true; // Use global loading
+
+    if (newNameTrimmed === "") {
+      // --- Resetting to Original Name --- //
+      statusMessage = `Resetting name for ${originalNameToUpdate}...`;
+      try {
+        await RenameStation(originalNameToUpdate, ""); // Pass empty string to signal reset
+        statusMessage = `Successfully reset name for ${originalNameToUpdate}. Refreshing list...`;
+        // Update local state immediately
+        stations = stations.map(s => {
+            if (s.address === addressToUpdate) {
+                return { ...s, name: originalNameToUpdate }; // Set name back to original
+            }
+            return s;
+        });
+        setTimeout(fetchLatestList, 500);
+      } catch (error) {
+        statusMessage = `Error resetting name: ${error}`;
+        console.error("Error RenameStation (reset):", error);
+        // Maybe trigger another fetch to revert local changes?
+      } finally {
+        isLoading = false;
+      }
+    } else {
+      // --- Saving New Name --- //
+      statusMessage = `Renaming ${originalNameToUpdate} to ${newNameTrimmed}...`;
+      try {
+        await RenameStation(originalNameToUpdate, newNameTrimmed);
+        statusMessage = `Successfully renamed to ${newNameTrimmed}. Refreshing list...`;
+        // Update local state immediately
+        stations = stations.map(s => {
+            if (s.address === addressToUpdate) {
+                return { ...s, name: newNameTrimmed };
+            }
+            return s;
+        });
+        setTimeout(fetchLatestList, 500);
+      } catch (error) {
+        statusMessage = `Error renaming station: ${error}`;
+        console.error("Error RenameStation (save):", error);
+        // Maybe trigger another fetch to revert local changes?
+      } finally {
+        isLoading = false;
+      }
+    }
+  }
+
+  function handleRenameKeydown(event: KeyboardEvent, station: StationInfo) {
+    if (event.key === 'Enter') {
+      saveRename(station);
+    } else if (event.key === 'Escape') {
+      cancelRename();
+    }
+  }
+
   function getPowerStateText(state: number): string {
     // Restore original logic
     switch (state) {
@@ -161,31 +255,50 @@
      </button>
   </div>
 
-  <p class="status">{statusMessage}</p>
-
   {#if stations.length > 0}
       <h2>Discovered Base Stations</h2>
       <ul class="station-list">
         {#each stations as station (station.address)}
-          <li class="station-item">
-            <span class="station-name">{station.name}</span>
-            <span class="station-address">({station.address})</span>
-            <span class="station-state">
-              State: <strong>{getPowerStateText(station.powerState)}</strong>
-            </span>
-            <!-- Restore Toggle Button functionality -->
-            <button
-              class="btn toggle-btn"
-              on:click={() => togglePower(station)}
-              disabled={station.powerState === -1 || operationInProgress[station.address] || isLoading || isBulkLoading}
-              title={station.powerState === -1 ? "Power state unknown" : `Turn ${station.powerState === 0 ? 'On' : 'Off'}`}
-            >
-              {#if operationInProgress[station.address]}
-                  Working...
+          <li 
+            class="station-item"
+            class:power-state-on={station.powerState === 1}
+            class:power-state-off={station.powerState === 0}
+            class:power-state-unknown={station.powerState === -1}
+          >
+            <div class="station-info">
+              {#if editingAddress === station.address}
+                <input
+                  type="text"
+                  bind:this={nameInput} bind:value={editingName}
+                  on:keydown={(e) => handleRenameKeydown(e, station)}
+                  on:blur={cancelRename}
+                  class="rename-input"
+                  placeholder="Enter new name"
+                />
               {:else}
-                  Toggle Power ({station.powerState === 0 ? 'On' : 'Off'})
+                <span class="station-name" on:click={() => startRename(station)} title="Click to rename">
+                  {station.name}
+                </span>
               {/if}
-            </button>
+              {#if station.name !== station.originalName && editingAddress !== station.address}
+                <span class="station-original-name">({station.originalName})</span>
+              {/if}
+              <span class="station-address">({station.address})</span>
+            </div>
+            <div class="station-controls">
+              <button
+                class="btn toggle-btn"
+                on:click={() => togglePower(station)}
+                disabled={station.powerState === -1 || operationInProgress[station.address] || isLoading || isBulkLoading}
+                title={station.powerState === -1 ? "Power state unknown" : `Turn ${station.powerState === 0 ? 'On' : 'Off'}`}
+              >
+                {#if operationInProgress[station.address]}
+                    Working...
+                {:else}
+                    Toggle Power ({station.powerState === 0 ? 'On' : 'Off'})
+                {/if}
+              </button>
+            </div>
           </li>
         {/each}
       </ul>
@@ -198,6 +311,9 @@
   {/if}
 
 </main>
+
+<!-- ADDED status bar outside main -->
+<div class="status-bar">{statusMessage}</div>
 
 <style>
   /* Global styles */
@@ -235,8 +351,9 @@
 
   main {
     max-width: 600px;
-    margin: 0 auto; /* Remove top/bottom margin, keep horizontal auto centering */
+    margin: 0 auto;
     padding: 20px;
+    padding-bottom: 40px; /* Add padding to prevent overlap with status bar */
     text-align: center;
   }
 
@@ -250,12 +367,6 @@
     display: flex;
     justify-content: center;
     gap: 1rem;
-  }
-
-  .status {
-    margin-bottom: 1.5rem;
-    font-style: italic;
-    color: #aaa;
   }
 
   .btn {
@@ -295,46 +406,110 @@
   }
 
   .station-item {
-    background-color: #2a3a52; /* Slightly lighter than main background */
+    background-color: #2a3a52;
     padding: 15px;
+    padding-left: 20px; /* Add more left padding to make room for border */
     margin-bottom: 10px;
     border-radius: 5px;
     border: 1px solid #3a4a62;
+    border-left-width: 5px; /* Define border width */
+    border-left-style: solid;
+    border-left-color: #5a6a82; /* Default/Unknown color (greyish) */
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap; /* Allow wrapping on smaller screens */
+    flex-direction: column;
+    text-align: left;
     gap: 10px;
+    transition: border-left-color 0.3s ease;
+  }
+
+  /* Power state specific border colors */
+  .station-item.power-state-on {
+      border-left-color: #4CAF50; /* Green */
+  }
+
+  .station-item.power-state-off {
+      border-left-color: #F44336; /* Red */
+  }
+
+  .station-item.power-state-unknown {
+      border-left-color: #5a6a82; /* Explicit grey for unknown */
+  }
+
+  .station-info {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5em;
+    width: 100%;
   }
 
   .station-name {
     font-weight: bold;
-    flex-basis: 150px; /* Give name some space */
     flex-grow: 1;
+    cursor: pointer; /* Indicate clickable */
+    padding: 2px 4px; /* Add slight padding for easier clicking */
+    border-radius: 3px;
+    transition: background-color 0.2s ease;
+  }
+  .station-name:hover {
+      background-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .station-original-name {
+      font-size: 0.8em;
+      color: #aaa;
+      font-style: italic;
+      margin-left: 5px;
   }
 
   .station-address {
     font-size: 0.85em;
     color: #aaa;
-    flex-basis: 180px; /* Give address space */
-    flex-grow: 1;
+    white-space: nowrap;
   }
 
- .station-state {
-     font-size: 0.9em;
-     min-width: 100px; /* Ensure state text doesn't wrap too easily */
-     text-align: right;
-     flex-grow: 1;
- }
-
-  .station-state strong {
-      color: #67b4e3;
+  .station-controls {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end; /* Align button to the right */
+      gap: 10px;
+      width: 100%;
+      margin-top: 5px;
+      /* REMOVED: No need for justify-content if state text is gone */
+      /* REMOVED: margin-right: auto; from station-state */
   }
 
-  /* Restore toggle-btn style */
+  .rename-input {
+      font-family: inherit;
+      font-size: inherit;
+      font-weight: bold;
+      padding: 2px 4px;
+      border: 1px solid #67b4e3;
+      background-color: #3a4a62;
+      color: #eee;
+      border-radius: 3px;
+      flex-grow: 1; /* Allow input to take space */
+      min-width: 100px;
+  }
+
   .toggle-btn {
-      min-width: 130px; /* Ensure button text fits */
-      flex-shrink: 0; /* Prevent button from shrinking too much */
+      min-width: 130px;
+      flex-shrink: 0;
+  }
+
+  /* ADDED status-bar styles */
+  .status-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      background-color: #2a3a52; /* Slightly different from body for visibility */
+      border-top: 1px solid #3a4a62;
+      color: #aaa;
+      padding: 6px 15px;
+      font-size: 0.85em;
+      text-align: center;
+      z-index: 10;
   }
 
 </style>

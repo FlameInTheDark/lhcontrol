@@ -2,6 +2,7 @@ export namespace main {
 	
 	export class StationInfo {
 	    name: string;
+	    originalName: string;
 	    address: string;
 	    powerState: number;
 	
@@ -12,6 +13,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
+	        this.originalName = source["originalName"];
 	        this.address = source["address"];
 	        this.powerState = source["powerState"];
 	    }

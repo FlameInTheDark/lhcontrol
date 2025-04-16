@@ -26,6 +26,14 @@ export function PowerOnStation(arg1) {
   return window['go']['main']['App']['PowerOnStation'](arg1);
 }
 
+export function RenameStation(arg1, arg2) {
+  return window['go']['main']['App']['RenameStation'](arg1, arg2);
+}
+
+export function SaveConfig() {
+  return window['go']['main']['App']['SaveConfig']();
+}
+
 export function ScanAndFetchStations() {
   return window['go']['main']['App']['ScanAndFetchStations']();
 }

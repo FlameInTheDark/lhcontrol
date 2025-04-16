@@ -2,20 +2,29 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
 	"lhcontrol/internal/bluetooth"
+
+	"github.com/gofiber/fiber/v2"
 	// "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // StationInfo is a simplified representation of a BaseStation for the frontend.
 type StationInfo struct {
-	Name       string `json:"name"`
-	Address    string `json:"address"`
-	PowerState int    `json:"powerState"`
+	Name         string `json:"name"`
+	OriginalName string `json:"originalName"`
+	Address      string `json:"address"`
+	PowerState   int    `json:"powerState"`
+}
+
+type Config struct {
+	RenamedStations map[string]string `json:"renamedStations"`
 }
 
 // App struct
@@ -24,6 +33,9 @@ type App struct {
 	// Use a map again to store stations keyed by address string for persistence
 	stations      map[string]*bluetooth.BaseStation
 	stationsMutex sync.RWMutex
+	config        Config
+
+	api *fiber.App
 }
 
 // NewApp creates a new App application struct
@@ -31,6 +43,7 @@ func NewApp() *App {
 	// Initialize the map
 	return &App{
 		stations: make(map[string]*bluetooth.BaseStation),
+		api:      fiber.New(),
 	}
 }
 
@@ -41,6 +54,31 @@ func (a *App) startup(ctx context.Context) {
 	if err != nil {
 		log.Printf("Error initializing Bluetooth: %v", err)
 	}
+
+	a.config.RenamedStations = make(map[string]string)
+
+	// Load renamed stations from file
+	configFile, err := os.ReadFile("config.json")
+	if err != nil {
+		log.Printf("Error reading config file: %v", err)
+	}
+
+	err = json.Unmarshal(configFile, &a.config)
+	if err != nil {
+		log.Printf("Error unmarshalling config: %v", err)
+	}
+
+	a.api.Post("/allon", func(c *fiber.Ctx) error {
+		a.PowerOnAllStations()
+		return c.SendStatus(fiber.StatusOK)
+	})
+
+	a.api.Post("/alloff", func(c *fiber.Ctx) error {
+		a.PowerOffAllStations()
+		return c.SendStatus(fiber.StatusOK)
+	})
+
+	go log.Fatal(a.api.Listen("127.0.0.1:7575"))
 	// No explicit shutdown needed for bluetooth package anymore
 }
 
@@ -134,10 +172,17 @@ func (a *App) GetCurrentStationInfo() []StationInfo {
 	// Iterate through the map
 	for _, stationPtr := range a.stations {
 		if stationPtr != nil {
+			var name string
+			if renamedName, ok := a.config.RenamedStations[stationPtr.Name]; ok {
+				name = renamedName
+			} else {
+				name = stationPtr.Name
+			}
 			stationInfos = append(stationInfos, StationInfo{
-				Name:       stationPtr.Name,
-				Address:    stationPtr.Address.String(),
-				PowerState: stationPtr.PowerState,
+				Name:         name,
+				OriginalName: stationPtr.Name,
+				Address:      stationPtr.Address.String(),
+				PowerState:   stationPtr.PowerState,
 			})
 		} else {
 			log.Printf("App: Warning - Nil pointer found in stations map during GetCurrentStationInfo")
@@ -254,10 +299,33 @@ func (a *App) PowerOffAllStations() error {
 	return nil
 }
 
+// rename function with saving to config
+func (a *App) RenameStation(originalName string, newName string) error {
+	if newName == "" {
+		// If newName is empty, remove the entry from the map to reset
+		delete(a.config.RenamedStations, originalName)
+		log.Printf("App: Resetting custom name for %s", originalName)
+	} else {
+		// Otherwise, save the new name
+		a.config.RenamedStations[originalName] = newName
+		log.Printf("App: Renaming %s to %s", originalName, newName)
+	}
+	return a.SaveConfig()
+}
+
+func (a *App) SaveConfig() error {
+	configFile, err := json.Marshal(a.config)
+	if err != nil {
+		return fmt.Errorf("error marshalling config: %w", err)
+	}
+	return os.WriteFile("config.json", configFile, 0644)
+}
+
 // shutdown is called when the app terminates.
 // It disconnects any active Bluetooth connections by iterating the map.
 func (a *App) shutdown(ctx context.Context) {
 	log.Println("App: Shutdown requested. Disconnecting all stations...")
+	a.api.Shutdown()
 	a.stationsMutex.Lock() // Lock for iterating
 	stationsToDisconnect := make([]*bluetooth.BaseStation, 0, len(a.stations))
 	for _, stationPtr := range a.stations {

@@ -14,4 +14,8 @@ export function PowerOnAllStations():Promise<void>;
 
 export function PowerOnStation(arg1:string):Promise<void>;
 
+export function RenameStation(arg1:string,arg2:string):Promise<void>;
+
+export function SaveConfig():Promise<void>;
+
 export function ScanAndFetchStations():Promise<Array<main.StationInfo>>;

@@ -12,6 +12,7 @@ A simple application to control Valve Lighthouse (SteamVR) base stations v2.0 po
 *   Display discovered stations and their current power state (On/Off/Unknown).
 *   Toggle the power state of individual base stations.
 *   Power On/Off all known base stations simultaneously.
+*   Rename base stations (locally) for easier identification.
 *   Persistent list of discovered stations across scans (within a single app session).
 
 ## Technology Stack
@@ -70,3 +71,29 @@ A simple application to control Valve Lighthouse (SteamVR) base stations v2.0 po
 *   **Scanning Issues:** If scans fail after the first time, or interactions fail with errors like "characteristic not found", try removing the base station(s) from your operating system's Bluetooth device list and restarting your computer. Do *not* re-pair them in the OS settings; the application will find them via scanning.
 *   **Bluetooth Drivers:** Ensure you have the latest drivers for your Bluetooth adapter.
 *   **Permissions:** The application might require specific permissions to access Bluetooth hardware.
+
+## HTTP API (for External Integration)
+
+This application also exposes a simple HTTP API on `http://127.0.0.1:7575` for basic control from external scripts or applications.
+
+**Endpoints:**
+
+*   **`POST /allon`**
+    *   **Description:** Attempts to turn ON all known base stations.
+    *   **Request Body:** None
+    *   **Response:** `200 OK` on success (or if command sent).
+
+*   **`POST /alloff`**
+    *   **Description:** Attempts to turn OFF all known base stations.
+    *   **Request Body:** None
+    *   **Response:** `200 OK` on success (or if command sent).
+
+**Example Usage (curl):**
+
+```bash
+# Turn all base stations ON
+curl -X POST http://127.0.0.1:7575/allon
+
+# Turn all base stations OFF
+curl -X POST http://127.0.0.1:7575/alloff
+```

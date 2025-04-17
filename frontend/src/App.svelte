@@ -11,6 +11,7 @@
     CheckAllStationStatuses, // Import new function
     IsScanning             // Import new function
   } from '../wailsjs/go/main/App';
+  import { EventsOn, EventsOff } from '../wailsjs/runtime/runtime';
 
   // Interface matching the Go StationInfo struct
   interface StationInfo {
@@ -42,6 +43,14 @@
     statusCheckInterval = setInterval(periodicStatusCheck, 15000); // 15 seconds
     // Trigger initial scan after UI mounts
     handleScanClick();
+
+    // Register event listener for external scan completion
+    EventsOn("external-scan-completed", (stationData) => {
+      console.log("Received external-scan-completed event");
+      // Update the stations list with the scan results
+      stations = stationData || [];
+      statusMessage = `External scan completed. ${stations.length} station(s) known.`;
+    });
   });
 
   onDestroy(() => {
@@ -49,6 +58,9 @@
     if (statusCheckInterval) {
       clearInterval(statusCheckInterval);
     }
+
+    // Unregister event listener
+    EventsOff("external-scan-completed");
   });
 
   // --- Periodic Status Check --- //

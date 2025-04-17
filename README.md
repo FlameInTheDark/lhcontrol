@@ -74,7 +74,7 @@ A simple application to control Valve Lighthouse (SteamVR) base stations v2.0 po
 
 ## HTTP API (for External Integration)
 
-This application also exposes a simple HTTP API on `http://127.0.0.1:7575` for basic control from external scripts or applications.
+This application also exposes a simple HTTP API on `http://127.0.0.1:7575` for basic control and status monitoring from external scripts or applications.
 
 **Endpoints:**
 
@@ -88,9 +88,40 @@ This application also exposes a simple HTTP API on `http://127.0.0.1:7575` for b
     *   **Request Body:** None
     *   **Response:** `200 OK` on success (or if command sent).
 
+*   **`GET /status`**
+    *   **Description:** Returns the current list of known base stations and their states.
+    *   **Request Body:** None
+    *   **Response:** `200 OK` with JSON body:
+        ```json
+        [
+          {
+            "name": "LHB-STATION1_RENAMED",
+            "originalName": "LHB-XXXXXXXX",
+            "address": "XX:XX:XX:XX:XX:XX",
+            "powerState": 1 
+          },
+          {
+            "name": "LHB-YYYYYYYY",
+            "originalName": "LHB-YYYYYYYY",
+            "address": "YY:YY:YY:YY:YY:YY",
+            "powerState": 0
+          }
+          // ... more stations
+        ]
+        ```
+        (Power States: -1 = Unknown, 0 = Off, 1 = On)
+
+*   **`POST /scan`**
+    *   **Description:** Triggers a background scan for base stations (approx. 5s scan + 7s state fetch). The list returned by `/status` will update once complete.
+    *   **Request Body:** None
+    *   **Response:** `202 Accepted` (indicates the scan has started).
+
 **Example Usage (curl):**
 
 ```bash
+# Get current status
+curl http://127.0.0.1:7575/status
+
 # Turn all base stations ON
 curl -X POST http://127.0.0.1:7575/allon
 

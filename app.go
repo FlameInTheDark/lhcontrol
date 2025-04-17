@@ -13,6 +13,7 @@ import (
 	"lhcontrol/internal/bluetooth"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // StationInfo is a simplified representation of a BaseStation for the frontend.
@@ -106,6 +107,34 @@ func (a *App) startup(ctx context.Context) {
 		// Use goroutine to avoid blocking API response while BT operation runs
 		go a.PowerOffAllStations()
 		return c.SendStatus(fiber.StatusOK)
+	})
+	// Add new GET /status endpoint
+	a.api.Get("/status", func(c *fiber.Ctx) error {
+		log.Println("API: Received GET /status request")
+		currentStations := a.GetCurrentStationInfo() // Get current data
+		log.Printf("API: Returning status for %d stations", len(currentStations))
+		return c.JSON(currentStations)
+	})
+	// Add new POST /scan endpoint
+	a.api.Post("/scan", func(c *fiber.Ctx) error {
+		log.Println("API: Received POST /scan request")
+		// Run scan in background to avoid blocking API response
+		go func() {
+			stations, err := a.ScanAndFetchStations()
+			if err != nil {
+				// Log error using standard logger (API goroutine might not have Wails context)
+				log.Printf("API: Error during background scan triggered by API: %v", err)
+			} else {
+				log.Println("API: Background scan triggered by API completed.")
+				// Emit an event to notify the frontend that a scan has completed
+				if a.ctx != nil {
+					runtime.EventsEmit(a.ctx, "external-scan-completed", stations)
+					log.Println("API: Emitted external-scan-completed event")
+				}
+			}
+		}()
+		// Return 202 Accepted immediately
+		return c.SendStatus(fiber.StatusAccepted)
 	})
 	// Start API server in a goroutine
 	go func() {

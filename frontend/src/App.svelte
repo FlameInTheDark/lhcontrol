@@ -1,51 +1,58 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
   import {
-    ScanAndFetchStations,  // Use this new method
-    GetCurrentStationInfo, // Restore import
-    PowerOnStation,  // Restore import
-    PowerOffStation, // Restore import
-    PowerOnAllStations, // Import new function
-    PowerOffAllStations, // Import new function
-    RenameStation, // Import the new function
-    CheckAllStationStatuses, // Import new function
-    IsScanning             // Import new function
+    ScanAndFetchStations,
+    GetCurrentStationInfo,
+    PowerOnStation,
+    PowerOffStation,
+    PowerOnAllStations,
+    PowerOffAllStations,
+    RenameStation,
+    CheckAllStationStatuses,
+    IsScanning
   } from '../wailsjs/go/main/App';
+  import {
+    RefreshCw,
+    Power,
+    Edit2,
+    Check,
+    X,
+    Zap,
+    Activity,
+    Loader2,
+    Bluetooth
+  } from 'lucide-svelte';
 
-  // Interface matching the Go StationInfo struct
   interface StationInfo {
     name: string;
-    originalName: string; // Add original name
+    originalName: string;
     address: string;
     powerState: number; // -1: Unknown, 0: Off, 1: On
   }
 
   let stations: StationInfo[] = [];
-  let statusMessage: string = "Click 'Scan' to find base stations.";
-  let operationInProgress: { [address: string]: boolean } = {}; // Restore state
-  let isLoading: boolean = false; // Track if Scan or Toggle is in progress
-  let isBulkLoading: boolean = false; // Track if bulk operation is in progress
+  let statusMessage: string = "Ready to scan.";
+  let operationInProgress: { [address: string]: boolean } = {};
+  let isLoading: boolean = false;
+  let isBulkLoading: boolean = false;
 
   // --- Renaming State --- //
   let editingAddress: string | null = null;
   let editingName: string = '';
   let nameInput: HTMLInputElement;
 
-  let statusCheckInterval: any = null; // Use 'any' to handle Node/browser type differences
+  let statusCheckInterval: any = null;
 
   // --- Reactive Sorting --- //
   $: sortedStations = [...stations].sort((a, b) => a.address.localeCompare(b.address));
 
   // --- Lifecycle --- //
   onMount(() => {
-    // Start periodic status check
-    statusCheckInterval = setInterval(periodicStatusCheck, 15000); // 15 seconds
-    // Trigger initial scan after UI mounts
+    statusCheckInterval = setInterval(periodicStatusCheck, 15000);
     handleScanClick();
   });
 
   onDestroy(() => {
-    // Clear interval on component destruction
     if (statusCheckInterval) {
       clearInterval(statusCheckInterval);
     }
@@ -55,19 +62,12 @@
   async function periodicStatusCheck() {
     try {
       const scanning = await IsScanning();
-      // Only check if not scanning, not loading, and not bulk loading
       if (!scanning && !isLoading && !isBulkLoading) {
-        console.log("Performing periodic status check...");
         const currentList = await CheckAllStationStatuses();
         stations = currentList || [];
-        // Update status message gently?
-        // statusMessage = "Checked statuses."; // Maybe too noisy
-      } else {
-        console.log("Skipping periodic status check (scan/operation active).");
       }
     } catch (error) {
       console.error("Error during periodic status check:", error);
-      // statusMessage = `Error during status check: ${error}`; // Can be noisy
     }
   }
 
@@ -75,126 +75,104 @@
   async function handleScanClick() {
     if (isLoading || isBulkLoading) return;
     isLoading = true;
-    // stations = []; // REMOVED: Don't clear the list visually
-    statusMessage = "Scanning and updating list..."; // Update message
-    // operationInProgress = {}; // Keep this? Or allow toggles during scan update?
-                                  // Let's keep it cleared for simplicity for now.
+    statusMessage = "Scanning for base stations...";
     operationInProgress = {};
 
     try {
-      // Call the backend method (which now returns the full persistent list)
       const result = await ScanAndFetchStations();
-      stations = result || []; // Assign to original `stations` array
+      stations = result || [];
       if (stations.length > 0) {
-        statusMessage = `Scan complete. ${stations.length} station(s) known.`;
+        statusMessage = `Found ${stations.length} station(s).`;
       } else {
-        statusMessage = "Scan complete. No stations known.";
+        statusMessage = "No stations found.";
       }
     } catch (error) {
-      statusMessage = `Error during scan/update: ${error}`;
+      statusMessage = `Scan failed: ${error}`;
       console.error("Error scan/update:", error);
-      // Don't clear stations on error, keep the last known good list?
-      // Or potentially fetch the list again?
-      // For now, keep the possibly stale list and show error.
     } finally {
       isLoading = false;
     }
   }
 
-  // Restore fetchLatestList function (used by toggle)
   async function fetchLatestList() {
-       // Make sure we cancel any ongoing edit before refreshing
        cancelRename();
        try {
            const currentList = await GetCurrentStationInfo();
-           stations = currentList || []; // Assign to original `stations` array
-           console.log("Refreshed list after operation.");
+           stations = currentList || [];
        } catch (error) {
-           console.error("Error fetching list after operation:", error);
+           console.error("Error fetching list:", error);
            statusMessage = `Error refreshing list: ${error}`;
        }
   }
 
-  // Restore togglePower function
   async function togglePower(station: StationInfo) {
-    // Restore check for powerState === -1
     if (station.powerState === -1 || operationInProgress[station.address] || isLoading || isBulkLoading) {
-      console.log(`Operation already in progress, state unknown, or scan active for ${station.address}`);
       return;
     }
 
-    // Restore original logic for determining target state
     const targetState = station.powerState === 0 ? 'ON' : 'OFF';
 
-    isLoading = true; // Prevent scanning during toggle
-    statusMessage = `Attempting to turn ${station.name} ${targetState}...`; // Restore original message
+    // Optimistic UI update could be done here, but we wait for confirmation for reliability
+    statusMessage = `Turning ${station.name} ${targetState}...`;
     operationInProgress = { ...operationInProgress, [station.address]: true };
-    stations = [...stations]; // Trigger reactivity for the list itself
+    stations = [...stations];
 
     try {
-      // Restore original logic for calling PowerOn/PowerOff
       if (station.powerState === 0) {
         await PowerOnStation(station.address);
       } else {
         await PowerOffStation(station.address);
       }
-      statusMessage = `Successfully turned ${station.name} ${targetState}. Refreshing list...`; // Restore original message
+      statusMessage = `Turned ${station.name} ${targetState}.`;
       setTimeout(fetchLatestList, 1500);
     } catch (error) {
-      statusMessage = `Error toggling power for ${station.name}: ${error}`; // Restore original message
+      statusMessage = `Failed to toggle ${station.name}: ${error}`;
       console.error(`Error toggling power for ${station.name}:`, error);
     } finally {
        operationInProgress = { ...operationInProgress, [station.address]: false };
-       stations = [...stations]; // Trigger reactivity
-       isLoading = false; // Reset loading after toggle attempt completes
+       stations = [...stations];
     }
   }
 
-  // Handles Power On All button click
   async function handlePowerOnAll() {
     if (isLoading || isBulkLoading) return;
     isBulkLoading = true;
-    statusMessage = "Attempting to power ON all stations...";
+    statusMessage = "Powering ON all stations...";
     try {
       await PowerOnAllStations();
-      statusMessage = "Sent Power ON command to all stations. Refreshing list...";
+      statusMessage = "Power ON command sent.";
     } catch (error) {
-      statusMessage = `Error powering on all stations: ${error}`;
-      console.error("Error PowerOnAll:", error);
+      statusMessage = `Error powering on all: ${error}`;
     } finally {
       isBulkLoading = false;
-      setTimeout(fetchLatestList, 1500); // Refresh list after attempt
+      setTimeout(fetchLatestList, 1500);
     }
   }
 
-  // Handles Power Off All button click
   async function handlePowerOffAll() {
     if (isLoading || isBulkLoading) return;
     isBulkLoading = true;
-    statusMessage = "Attempting to power OFF all stations...";
+    statusMessage = "Powering OFF all stations...";
     try {
       await PowerOffAllStations();
-      statusMessage = "Sent Power OFF command to all stations. Refreshing list...";
+      statusMessage = "Power OFF command sent.";
     } catch (error) {
-      statusMessage = `Error powering off all stations: ${error}`;
-      console.error("Error PowerOffAll:", error);
+      statusMessage = `Error powering off all: ${error}`;
     } finally {
       isBulkLoading = false;
-      setTimeout(fetchLatestList, 1500); // Refresh list after attempt
+      setTimeout(fetchLatestList, 1500);
     }
   }
 
   // --- Renaming Logic --- //
   async function startRename(station: StationInfo) {
     if (isLoading || isBulkLoading || operationInProgress[station.address]) return;
-    // Cancel any previous edit
     cancelRename();
     editingAddress = station.address;
-    editingName = station.name; // Initialize input with current name
-    // Wait for the DOM to update, then focus the input
+    editingName = station.name;
     await tick();
     nameInput?.focus();
-    nameInput?.select(); // Select text for easy replacement
+    nameInput?.select();
   }
 
   function cancelRename() {
@@ -204,60 +182,29 @@
 
   async function saveRename(station: StationInfo) {
     const newNameTrimmed = editingName.trim();
-    const addressToUpdate = station.address; // Keep track before cancelling
     const originalNameToUpdate = station.originalName;
 
     if (newNameTrimmed === station.name) {
-      // Name hasn't changed
       cancelRename();
       return;
     }
 
-    cancelRename(); // Switch UI back immediately for both empty and non-empty cases
-    isLoading = true; // Use global loading
+    cancelRename();
+    // Don't set global isLoading to avoid blocking everything, just show status
+    statusMessage = "Updating name...";
 
-    if (newNameTrimmed === "") {
-      // --- Resetting to Original Name --- //
-      statusMessage = `Resetting name for ${originalNameToUpdate}...`;
-      try {
-        await RenameStation(originalNameToUpdate, ""); // Pass empty string to signal reset
-        statusMessage = `Successfully reset name for ${originalNameToUpdate}. Refreshing list...`;
-        // Update local state immediately
-        stations = stations.map(s => {
-            if (s.address === addressToUpdate) {
-                return { ...s, name: originalNameToUpdate }; // Set name back to original
-            }
-            return s;
-        });
-        setTimeout(fetchLatestList, 500);
-      } catch (error) {
-        statusMessage = `Error resetting name: ${error}`;
-        console.error("Error RenameStation (reset):", error);
-        // Maybe trigger another fetch to revert local changes?
-      } finally {
-        isLoading = false;
-      }
-    } else {
-      // --- Saving New Name --- //
-      statusMessage = `Renaming ${originalNameToUpdate} to ${newNameTrimmed}...`;
-      try {
+    try {
+      if (newNameTrimmed === "") {
+        await RenameStation(originalNameToUpdate, "");
+        statusMessage = `Reset name for ${originalNameToUpdate}.`;
+      } else {
         await RenameStation(originalNameToUpdate, newNameTrimmed);
-        statusMessage = `Successfully renamed to ${newNameTrimmed}. Refreshing list...`;
-        // Update local state immediately
-        stations = stations.map(s => {
-            if (s.address === addressToUpdate) {
-                return { ...s, name: newNameTrimmed };
-            }
-            return s;
-        });
-        setTimeout(fetchLatestList, 500);
-      } catch (error) {
-        statusMessage = `Error renaming station: ${error}`;
-        console.error("Error RenameStation (save):", error);
-        // Maybe trigger another fetch to revert local changes?
-      } finally {
-        isLoading = false;
+        statusMessage = `Renamed to ${newNameTrimmed}.`;
       }
+      // Fetching for consistency after a short delay to allow backend to update
+      setTimeout(fetchLatestList, 500);
+    } catch (error) {
+      statusMessage = `Error renaming: ${error}`;
     }
   }
 
@@ -268,290 +215,438 @@
       cancelRename();
     }
   }
+</script>
 
-  function getPowerStateText(state: number): string {
-    // Restore original logic
-    switch (state) {
-      case 0: return 'Off';
-      case 1: return 'On';
-      default: return 'Unknown';
+<div class="app-container">
+  <header>
+    <div class="title-group">
+      <div class="logo-icon">
+        <Activity size={32} color="var(--color-primary)" />
+      </div>
+      <h1>Lighthouse Control</h1>
+    </div>
+
+    <div class="global-controls">
+       <button class="btn btn-primary" on:click={handleScanClick} disabled={isLoading || isBulkLoading}>
+         {#if isLoading}
+           <Loader2 class="spin" size={18} />
+           <span>Scanning...</span>
+         {:else}
+           <RefreshCw size={18} />
+           <span>Scan</span>
+         {/if}
+       </button>
+
+       <div class="button-group">
+         <button class="btn btn-surface" on:click={handlePowerOnAll} disabled={isLoading || isBulkLoading || stations.length === 0}>
+            {#if isBulkLoading}
+              <Loader2 class="spin" size={18} />
+            {:else}
+              <Zap size={18} />
+            {/if}
+            <span>All On</span>
+         </button>
+         <button class="btn btn-surface" on:click={handlePowerOffAll} disabled={isLoading || isBulkLoading || stations.length === 0}>
+            {#if isBulkLoading}
+              <Loader2 class="spin" size={18} />
+            {:else}
+              <Power size={18} />
+            {/if}
+            <span>All Off</span>
+         </button>
+       </div>
+    </div>
+  </header>
+
+  <main>
+    {#if sortedStations.length > 0}
+        <div class="station-grid">
+          {#each sortedStations as station (station.address)}
+            <div
+              class="station-card"
+              class:is-on={station.powerState === 1}
+              class:is-off={station.powerState === 0}
+              class:is-unknown={station.powerState === -1}
+            >
+              <div class="card-header">
+                <div class="station-identity">
+                  {#if editingAddress === station.address}
+                    <div class="rename-container">
+                      <input
+                        type="text"
+                        bind:this={nameInput}
+                        bind:value={editingName}
+                        on:keydown={(e) => handleRenameKeydown(e, station)}
+                        on:blur={cancelRename}
+                        class="rename-input"
+                        placeholder="Station Name"
+                      />
+                      <button class="icon-btn success" on:mousedown|preventDefault={() => saveRename(station)}>
+                        <Check size={16} />
+                      </button>
+                      <button class="icon-btn danger" on:mousedown|preventDefault={cancelRename}>
+                        <X size={16} />
+                      </button>
+                    </div>
+                  {:else}
+                    <div class="name-row">
+                      <h3 title={station.name}>{station.name}</h3>
+                      <button class="icon-btn ghost" on:click={() => startRename(station)} title="Rename">
+                        <Edit2 size={14} />
+                      </button>
+                    </div>
+                    {#if station.name !== station.originalName}
+                      <span class="original-name">{station.originalName}</span>
+                    {/if}
+                  {/if}
+                </div>
+
+                <div class="status-badge" class:on={station.powerState===1} class:off={station.powerState===0}>
+                  {#if station.powerState === 1}
+                    On
+                  {:else if station.powerState === 0}
+                    Off
+                  {:else}
+                    Unknown
+                  {/if}
+                </div>
+              </div>
+
+              <div class="card-body">
+                <div class="info-row">
+                  <Bluetooth size={14} class="text-muted" />
+                  <span class="address">{station.address}</span>
+                </div>
+              </div>
+
+              <div class="card-footer">
+                <button
+                  class="btn btn-full toggle-btn"
+                  class:btn-success={station.powerState === 0}
+                  class:btn-danger={station.powerState === 1}
+                  on:click={() => togglePower(station)}
+                  disabled={station.powerState === -1 || operationInProgress[station.address] || isLoading || isBulkLoading}
+                >
+                  {#if operationInProgress[station.address]}
+                      <Loader2 class="spin" size={18} />
+                      <span>Working...</span>
+                  {:else}
+                      <Power size={18} />
+                      <span>Turn {station.powerState === 0 ? 'On' : 'Off'}</span>
+                  {/if}
+                </button>
+              </div>
+            </div>
+          {/each}
+        </div>
+    {:else if !isLoading && !isBulkLoading}
+        <div class="empty-state">
+          <Activity size={48} color="var(--text-muted)" />
+          <p>No base stations found.</p>
+          <button class="btn btn-primary" on:click={handleScanClick}>Scan Now</button>
+        </div>
+     {:else if isLoading}
+         <div class="loading-state">
+            <Loader2 class="spin" size={32} color="var(--color-primary)" />
+            <p>Scanning for devices...</p>
+         </div>
+    {/if}
+  </main>
+
+  <div class="status-bar">
+    <div class="status-content">
+      <Activity size={14} />
+      <span>{statusMessage}</span>
+    </div>
+  </div>
+</div>
+
+<style>
+  .app-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background-color: var(--bg-app);
+  }
+
+  header {
+    padding: var(--spacing-lg);
+    background-color: var(--bg-surface);
+    border-bottom: 1px solid var(--color-border);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+    box-shadow: var(--shadow-sm);
+  }
+
+  @media (min-width: 600px) {
+    header {
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
     }
   }
 
-  // No polling timeout to clear in onDestroy
-
-</script>
-
-<main>
-  <h1>Lighthouse Control</h1>
-
-  <div class="controls">
-     <button class="btn" on:click={handleScanClick} disabled={isLoading || isBulkLoading}>
-       {#if isLoading}Scanning...{:else}Scan{/if}
-     </button>
-     <button class="btn" on:click={handlePowerOnAll} disabled={isLoading || isBulkLoading || stations.length === 0}>
-       {#if isBulkLoading}Working...{:else}Power On All{/if}
-     </button>
-     <button class="btn" on:click={handlePowerOffAll} disabled={isLoading || isBulkLoading || stations.length === 0}>
-       {#if isBulkLoading}Working...{:else}Power Off All{/if}
-     </button>
-  </div>
-
-  {#if sortedStations.length > 0}
-      <h2>Discovered Base Stations</h2>
-      <ul class="station-list">
-        {#each sortedStations as station (station.address)}
-          <li 
-            class="station-item"
-            class:power-state-on={station.powerState === 1}
-            class:power-state-off={station.powerState === 0}
-            class:power-state-unknown={station.powerState === -1}
-          >
-            <div class="station-info">
-              {#if editingAddress === station.address}
-                <input
-                  type="text"
-                  bind:this={nameInput} bind:value={editingName}
-                  on:keydown={(e) => handleRenameKeydown(e, station)}
-                  on:blur={cancelRename}
-                  class="rename-input"
-                  placeholder="Enter new name"
-                />
-              {:else}
-                <span class="station-name" on:click={() => startRename(station)} title="Click to rename">
-                  {station.name}
-                </span>
-              {/if}
-              {#if station.name !== station.originalName && editingAddress !== station.address}
-                <span class="station-original-name">({station.originalName})</span>
-              {/if}
-              <span class="station-address">({station.address})</span>
-            </div>
-            <div class="station-controls">
-              <button
-                class="btn toggle-btn"
-                on:click={() => togglePower(station)}
-                disabled={station.powerState === -1 || operationInProgress[station.address] || isLoading || isBulkLoading}
-                title={station.powerState === -1 ? "Power state unknown" : `Turn ${station.powerState === 0 ? 'On' : 'Off'}`}
-              >
-                {#if operationInProgress[station.address]}
-                    Working...
-                {:else}
-                    Toggle Power ({station.powerState === 0 ? 'On' : 'Off'})
-                {/if}
-              </button>
-            </div>
-          </li>
-        {/each}
-      </ul>
-  {:else if !isLoading && !isBulkLoading}
-      <p>List is empty. Click 'Scan' to find base stations.</p>
-   {:else if isLoading}
-       <p>Scanning...</p>
-   {:else if isBulkLoading}
-       <p>Performing bulk operation...</p>
-  {/if}
-
-</main>
-
-<!-- ADDED status bar outside main -->
-<div class="status-bar">{statusMessage}</div>
-
-<style>
-  /* Global styles */
-  * {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
+  .title-group {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    justify-content: center;
   }
 
-  :global(html) {
-      height: 100%; /* Define viewport height */
-      /* Hide scrollbar attempts on html */
-      scrollbar-width: none; /* Firefox */
-      -ms-overflow-style: none;  /* IE and Edge */
-  }
-   :global(html::-webkit-scrollbar) {
-      display: none; /* Chrome, Safari, Opera */
-  }
-
-  :global(body) {
-      height: 100%; /* Ensure body takes full height */
-      overflow-y: auto; /* Allow scrolling if content exceeds viewport */
-      background-color: #1b2636;
-      color: #eee;
-      font-family: sans-serif;
-
-      /* Reinforce scrollbar hiding on body */
-      scrollbar-width: none; /* Firefox */
-      -ms-overflow-style: none;  /* IE and Edge */
-  }
-
- :global(body::-webkit-scrollbar) {
-    display: none; /* Chrome, Safari, Opera */
- }
-
-  main {
-    max-width: 600px;
-    margin: 0 auto;
-    padding: 20px;
-    padding-bottom: 40px; /* Add padding to prevent overlap with status bar */
-    text-align: center;
+  .logo-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   h1 {
-    color: #67b4e3; /* Wails-like blue */
-    margin-bottom: 1.5rem; /* Keep existing */
-  }
-
-  .controls {
-    margin-bottom: 1.5rem;
-    display: flex;
-    justify-content: center;
-    gap: 1rem;
-  }
-
-  .btn {
-    padding: 8px 15px;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    background-color: #4a5a72; /* Darker button */
-    color: white;
-    transition: background-color 0.2s ease;
-    font-size: 0.9rem;
-  }
-
-  .btn:hover:not(:disabled) {
-    background-color: #5a6a82; /* Lighter on hover */
-  }
-
-  .btn:disabled {
-    background-color: #3a4a62; /* Even darker when disabled */
-    color: #888;
-    cursor: not-allowed;
-  }
-
-  h2 {
-      color: #67b4e3;
-      margin-top: 2rem;
-      margin-bottom: 1rem;
-      border-bottom: 1px solid #4a5a72;
-      padding-bottom: 0.5rem;
-  }
-
-  .station-list {
-    list-style: none;
-    padding: 0;
+    font-size: 1.5rem;
+    font-weight: 700;
     margin: 0;
-    text-align: left;
+    color: var(--text-primary);
   }
 
-  .station-item {
-    background-color: #2a3a52;
-    padding: 15px;
-    padding-left: 20px; /* Add more left padding to make room for border */
-    margin-bottom: 10px;
-    border-radius: 5px;
-    border: 1px solid #3a4a62;
-    border-left-width: 5px; /* Define border width */
-    border-left-style: solid;
-    border-left-color: #5a6a82; /* Default/Unknown color (greyish) */
+  .global-controls {
     display: flex;
-    flex-direction: column;
-    text-align: left;
-    gap: 10px;
-    transition: border-left-color 0.3s ease;
+    gap: var(--spacing-sm);
+    justify-content: center;
   }
 
-  /* Power state specific border colors */
-  .station-item.power-state-on {
-      border-left-color: #4CAF50; /* Green */
-  }
-
-  .station-item.power-state-off {
-      border-left-color: #F44336; /* Red */
-  }
-
-  .station-item.power-state-unknown {
-      border-left-color: #5a6a82; /* Explicit grey for unknown */
-  }
-
-  .station-info {
+  .button-group {
     display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 0.5em;
+    gap: var(--spacing-xs);
+    background-color: var(--bg-app);
+    padding: 2px;
+    border-radius: var(--radius-md);
+  }
+
+  main {
+    flex: 1;
+    padding: var(--spacing-lg);
+    overflow-y: auto;
+    position: relative;
+    max-width: 1200px;
+    margin: 0 auto;
     width: 100%;
   }
 
-  .station-name {
-    font-weight: bold;
-    flex-grow: 1;
-    cursor: pointer; /* Indicate clickable */
-    padding: 2px 4px; /* Add slight padding for easier clicking */
-    border-radius: 3px;
-    transition: background-color 0.2s ease;
-  }
-  .station-name:hover {
-      background-color: rgba(255, 255, 255, 0.1);
-  }
-
-  .station-original-name {
-      font-size: 0.8em;
-      color: #aaa;
-      font-style: italic;
-      margin-left: 5px;
+  /* Buttons */
+  .btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-sm);
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: var(--radius-md);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition);
+    color: white;
   }
 
-  .station-address {
-    font-size: 0.85em;
-    color: #aaa;
-    white-space: nowrap;
+  .btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 
-  .station-controls {
-      display: flex;
-      align-items: center;
-      justify-content: flex-end; /* Align button to the right */
-      gap: 10px;
-      width: 100%;
-      margin-top: 5px;
-      /* REMOVED: No need for justify-content if state text is gone */
-      /* REMOVED: margin-right: auto; from station-state */
+  .btn-primary {
+    background-color: var(--color-primary);
+  }
+  .btn-primary:hover:not(:disabled) {
+    background-color: var(--color-primary-hover);
+  }
+
+  .btn-surface {
+    background-color: var(--bg-surface);
+    color: var(--text-secondary);
+  }
+  .btn-surface:hover:not(:disabled) {
+    background-color: var(--bg-surface-hover);
+    color: var(--text-primary);
+  }
+
+  .btn-success { background-color: var(--color-success); }
+  .btn-success:hover:not(:disabled) { filter: brightness(1.1); }
+
+  .btn-danger { background-color: var(--color-danger); }
+  .btn-danger:hover:not(:disabled) { filter: brightness(1.1); }
+
+  .btn-full { width: 100%; }
+
+  .icon-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--transition);
+  }
+
+  .icon-btn.ghost { color: var(--text-muted); }
+  .icon-btn.ghost:hover { color: var(--text-primary); background-color: rgba(255,255,255,0.1); }
+
+  .icon-btn.success { color: var(--color-success); }
+  .icon-btn.success:hover { background-color: rgba(34, 197, 94, 0.1); }
+
+  .icon-btn.danger { color: var(--color-danger); }
+  .icon-btn.danger:hover { background-color: rgba(239, 68, 68, 0.1); }
+
+  /* Station Grid */
+  .station-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: var(--spacing-md);
+  }
+
+  .station-card {
+    background-color: var(--bg-surface);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--color-border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: var(--transition);
+    position: relative;
+  }
+
+  .station-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+    border-color: var(--text-muted);
+  }
+
+  /* Status indicators on card border */
+  .station-card.is-on { border-left: 4px solid var(--color-success); }
+  .station-card.is-off { border-left: 4px solid var(--color-danger); }
+  .station-card.is-unknown { border-left: 4px solid var(--text-muted); }
+
+  .card-header {
+    padding: var(--spacing-md);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+
+  .station-identity {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+
+  .name-row {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+  }
+
+  .name-row h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    color: var(--text-primary);
+  }
+
+  .original-name {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
+  .status-badge {
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 12px;
+    background-color: var(--bg-app);
+    color: var(--text-muted);
+    text-transform: uppercase;
+  }
+
+  .status-badge.on { background-color: rgba(34, 197, 94, 0.2); color: var(--color-success); }
+  .status-badge.off { background-color: rgba(239, 68, 68, 0.2); color: var(--color-danger); }
+
+  .card-body {
+    padding: var(--spacing-md);
+    flex: 1;
+  }
+
+  .info-row {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+  }
+
+  .card-footer {
+    padding: var(--spacing-md);
+    background-color: rgba(0,0,0,0.1);
+  }
+
+  /* Renaming */
+  .rename-container {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    width: 100%;
   }
 
   .rename-input {
-      font-family: inherit;
-      font-size: inherit;
-      font-weight: bold;
-      padding: 2px 4px;
-      border: 1px solid #67b4e3;
-      background-color: #3a4a62;
-      color: #eee;
-      border-radius: 3px;
-      flex-grow: 1; /* Allow input to take space */
-      min-width: 100px;
+    background-color: var(--bg-input);
+    border: 1px solid var(--color-primary);
+    color: white;
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    font-size: 1rem;
+    width: 100%;
+    outline: none;
   }
 
-  .toggle-btn {
-      min-width: 130px;
-      flex-shrink: 0;
+  /* States */
+  .empty-state, .loading-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    min-height: 200px;
+    color: var(--text-muted);
+    gap: var(--spacing-md);
   }
 
-  /* ADDED status-bar styles */
+  /* Status Bar */
   .status-bar {
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      width: 100%;
-      background-color: #2a3a52; /* Slightly different from body for visibility */
-      border-top: 1px solid #3a4a62;
-      color: #aaa;
-      padding: 6px 15px;
-      font-size: 0.85em;
-      text-align: center;
-      z-index: 10;
+    background-color: var(--bg-surface);
+    border-top: 1px solid var(--color-border);
+    padding: var(--spacing-xs) var(--spacing-md);
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    display: flex;
+    justify-content: center;
   }
 
+  .status-content {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+  }
+
+  /* Utilities */
+  :global(.spin) {
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
 </style>

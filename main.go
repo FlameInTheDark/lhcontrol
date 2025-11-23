@@ -1,5 +1,3 @@
-//go:build windows
-
 package main
 
 import (
@@ -12,8 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall" // Import syscall for Windows API
-	"unsafe"
+
+	"lhcontrol/internal/platform"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -25,106 +23,6 @@ var assets embed.FS
 
 const lockPort = "34115"     // Port used for single instance check
 const appTitle = "lhcontrol" // Define app title constant
-
-// Windows API constants (from winuser.h)
-const (
-	SW_RESTORE    = 9
-	SW_SHOWNORMAL = 1
-)
-
-var (
-	user32                  = syscall.NewLazyDLL("user32.dll")
-	procFindWindowW         = user32.NewProc("FindWindowW")
-	procSetForegroundWindow = user32.NewProc("SetForegroundWindow")
-	procShowWindow          = user32.NewProc("ShowWindow")
-	procFlashWindowEx       = user32.NewProc("FlashWindowEx")
-)
-
-// FLASHW flags
-const (
-	FLASHW_STOP      = 0
-	FLASHW_CAPTION   = 0x00000001
-	FLASHW_TRAY      = 0x00000002
-	FLASHW_ALL       = FLASHW_CAPTION | FLASHW_TRAY
-	FLASHW_TIMER     = 0x00000004
-	FLASHW_TIMERNOFG = 0x0000000C
-)
-
-// FLASHWINFO struct
-type FLASHWINFO struct {
-	CbSize    uint32
-	Hwnd      syscall.Handle
-	DwFlags   uint32
-	UCout     uint32
-	DwTimeout uint32
-}
-
-// findWindow finds a window by title.
-func findWindow(title string) (syscall.Handle, error) {
-	titlePtr, err := syscall.UTF16PtrFromString(title)
-	if err != nil {
-		return 0, err
-	}
-	hwnd, _, err := procFindWindowW.Call(0, uintptr(unsafe.Pointer(titlePtr)))
-	// Check for specific error "Invalid window handle." which means not found
-	if err != nil && err.Error() != "The operation completed successfully." {
-		// Check if error indicates not found (this might vary, often it's just HWND=0 with success error)
-		if hwnd == 0 { // Best check is often just if handle is zero
-			return 0, nil // Not found, but not an API error
-		}
-		return 0, err // Actual API error
-	}
-	return syscall.Handle(hwnd), nil
-}
-
-// setForegroundWindow brings a window to the foreground.
-func setForegroundWindow(hwnd syscall.Handle) bool {
-	ret, _, _ := procSetForegroundWindow.Call(uintptr(hwnd))
-	return ret != 0
-}
-
-// showWindow changes the visibility state of a window.
-func showWindow(hwnd syscall.Handle, cmdshow int) bool {
-	ret, _, _ := procShowWindow.Call(uintptr(hwnd), uintptr(cmdshow))
-	return ret != 0
-}
-
-// flashWindowEx flashes the window using FlashWindowEx.
-func flashWindowEx(hwnd syscall.Handle, flags uint32, count uint32, timeout uint32) bool {
-	var fi FLASHWINFO
-	fi.CbSize = uint32(unsafe.Sizeof(fi))
-	fi.Hwnd = hwnd
-	fi.DwFlags = flags
-	fi.UCout = count
-	fi.DwTimeout = timeout
-
-	ret, _, _ := procFlashWindowEx.Call(uintptr(unsafe.Pointer(&fi)))
-	return ret != 0
-}
-
-// BringWindowToFront finds the existing window, tries to set foreground, and flashes it (Windows specific)
-func BringWindowToFront() {
-	hwnd, err := findWindow(appTitle)
-	if err != nil {
-		log.Printf("Error finding window: %v", err)
-		return
-	}
-	if hwnd == 0 {
-		log.Println("Existing window not found.")
-		return
-	}
-
-	// Try restoring and setting foreground first
-	showWindow(hwnd, SW_RESTORE)    // Restore if minimized
-	if !setForegroundWindow(hwnd) { // Attempt to set foreground
-		// If SetForegroundWindow fails, flash the window
-		log.Println("SetForegroundWindow failed (maybe window is not allowed to take focus?). Flashing instead.")
-		flashWindowEx(hwnd, FLASHW_ALL|FLASHW_TIMERNOFG, 0, 0) // Flash indefinitely until focus
-	} else {
-		log.Println("SetForegroundWindow succeeded.")
-		// Optional: Maybe stop flashing if it was started? But SetForegroundWindow should take precedence.
-	}
-}
 
 // setupLogging configures logging to write to both console and a file.
 // Assumes it's only called when file logging is desired.
@@ -189,7 +87,7 @@ func main() {
 	if err != nil {
 		if strings.Contains(err.Error(), "address already in use") || strings.Contains(err.Error(), "bind: address already in use") || strings.Contains(err.Error(), "bind: Only one usage of each socket address") {
 			log.Println("Application is already running. Bringing existing window to front...")
-			BringWindowToFront()
+			platform.BringWindowToFront(appTitle)
 			if logFile != nil {
 				logFile.Sync()
 			} // Sync before exit, only if file exists

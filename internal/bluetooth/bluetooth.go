@@ -298,9 +298,8 @@ func PowerOn(station *BaseStation) error {
 		return fmt.Errorf("failed to connect/discover before PowerOn: %w", err)
 	}
 
-	log.Printf("Bluetooth: Sending Power ON command to %s using Write", station.Name)
-	// Use standard Write instead of WriteWithoutResponse
-	n, err := station.characteristic.Write([]byte{0x01})
+	log.Printf("Bluetooth: Sending Power ON command to %s using WriteWithoutResponse", station.Name)
+	n, err := station.characteristic.WriteWithoutResponse([]byte{0x01})
 	if err != nil {
 		disconnectInternal(station)
 		return fmt.Errorf("failed to write Power ON command: %w", err)
@@ -331,9 +330,8 @@ func PowerOff(station *BaseStation) error {
 		return fmt.Errorf("failed to connect/discover before PowerOff: %w", err)
 	}
 
-	log.Printf("Bluetooth: Sending Power OFF command to %s using Write", station.Name)
-	// Use standard Write instead of WriteWithoutResponse
-	n, err := station.characteristic.Write([]byte{0x00})
+	log.Printf("Bluetooth: Sending Power OFF command to %s using WriteWithoutResponse", station.Name)
+	n, err := station.characteristic.WriteWithoutResponse([]byte{0x00})
 	if err != nil {
 		disconnectInternal(station)
 		return fmt.Errorf("failed to write Power OFF command: %w", err)

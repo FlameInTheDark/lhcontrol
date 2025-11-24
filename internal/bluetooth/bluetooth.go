@@ -244,16 +244,48 @@ func connectAndDiscoverInternal(station *BaseStation) error {
 
 	if station.characteristic == nil {
 		log.Printf("Bluetooth: Internal discovery attempt for %s...", station.Name)
-		services, err := station.device.DiscoverServices([]bluetooth.UUID{powerControlServiceUUID})
-		if err != nil || len(services) == 0 {
-			disconnectInternal(station)
-			return fmt.Errorf("service discovery failed internal: %v", err)
+
+		var services []bluetooth.DeviceService
+		var chars []bluetooth.DeviceCharacteristic
+		var err error
+
+		const maxRetries = 3
+		for i := 0; i < maxRetries; i++ {
+			if i > 0 {
+				log.Printf("Bluetooth: Retrying discovery for %s (attempt %d/%d)...", station.Name, i+1, maxRetries)
+				time.Sleep(500 * time.Millisecond)
+			}
+
+			services, err = station.device.DiscoverServices([]bluetooth.UUID{powerControlServiceUUID})
+			if err != nil {
+				// Retry if discovery returns error
+				continue
+			}
+			if len(services) == 0 {
+				err = fmt.Errorf("no services found")
+				continue
+			}
+
+			chars, err = services[0].DiscoverCharacteristics([]bluetooth.UUID{powerControlCharacteristicUUID})
+			if err != nil {
+				// Retry if char discovery returns error
+				continue
+			}
+			if len(chars) == 0 {
+				err = fmt.Errorf("no characteristics found")
+				continue
+			}
+
+			// If we reach here, we found what we needed
+			err = nil
+			break
 		}
-		chars, err := services[0].DiscoverCharacteristics([]bluetooth.UUID{powerControlCharacteristicUUID})
-		if err != nil || len(chars) == 0 {
+
+		if err != nil {
 			disconnectInternal(station)
-			return fmt.Errorf("characteristic discovery failed internal: %v", err)
+			return fmt.Errorf("discovery failed internal for %s after %d retries: %w", station.Name, maxRetries, err)
 		}
+
 		station.characteristic = &chars[0]
 		log.Printf("Bluetooth: Internal discovery successful for %s.", station.Name)
 	}

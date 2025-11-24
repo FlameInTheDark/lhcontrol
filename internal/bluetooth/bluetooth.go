@@ -346,6 +346,11 @@ func PowerOn(station *BaseStation) error {
 		log.Printf("Bluetooth: Sending Power ON command to %s using WriteWithoutResponse", station.Name)
 		var n int
 		n, err = station.characteristic.WriteWithoutResponse([]byte{0x01})
+		if err != nil && strings.Contains(err.Error(), "not supported") {
+			log.Printf("Bluetooth: WriteWithoutResponse not supported for %s (%v), attempting standard Write...", station.Name, err)
+			n, err = station.characteristic.Write([]byte{0x01})
+		}
+
 		if err == nil {
 			if n != 1 {
 				// A successful write should return n=1 for one byte
@@ -400,6 +405,11 @@ func PowerOff(station *BaseStation) error {
 		log.Printf("Bluetooth: Sending Power OFF command to %s using WriteWithoutResponse", station.Name)
 		var n int
 		n, err = station.characteristic.WriteWithoutResponse([]byte{0x00})
+		if err != nil && strings.Contains(err.Error(), "not supported") {
+			log.Printf("Bluetooth: WriteWithoutResponse not supported for %s (%v), attempting standard Write...", station.Name, err)
+			n, err = station.characteristic.Write([]byte{0x00})
+		}
+
 		if err == nil {
 			if n != 1 {
 				log.Printf("Bluetooth: Warning - wrote %d bytes instead of 1 for Power OFF on %s", n, station.Name)

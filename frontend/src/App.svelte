@@ -221,7 +221,7 @@
   <header>
     <div class="title-group">
       <div class="logo-icon">
-        <Activity size={32} color="var(--color-primary)" />
+        <Activity size={24} color="var(--color-primary)" />
       </div>
       <h1>Lighthouse Control</h1>
     </div>
@@ -229,10 +229,10 @@
     <div class="global-controls">
        <button class="btn btn-primary" on:click={handleScanClick} disabled={isLoading || isBulkLoading}>
          {#if isLoading}
-           <Loader2 class="spin" size={18} />
+           <Loader2 class="spin" size={16} />
            <span>Scanning...</span>
          {:else}
-           <RefreshCw size={18} />
+           <RefreshCw size={16} />
            <span>Scan</span>
          {/if}
        </button>
@@ -240,17 +240,17 @@
        <div class="button-group">
          <button class="btn btn-surface" on:click={handlePowerOnAll} disabled={isLoading || isBulkLoading || stations.length === 0}>
             {#if isBulkLoading}
-              <Loader2 class="spin" size={18} />
+              <Loader2 class="spin" size={16} />
             {:else}
-              <Zap size={18} />
+              <Zap size={16} />
             {/if}
             <span>All On</span>
          </button>
          <button class="btn btn-surface" on:click={handlePowerOffAll} disabled={isLoading || isBulkLoading || stations.length === 0}>
             {#if isBulkLoading}
-              <Loader2 class="spin" size={18} />
+              <Loader2 class="spin" size={16} />
             {:else}
-              <Power size={18} />
+              <Power size={16} />
             {/if}
             <span>All Off</span>
          </button>
@@ -268,7 +268,7 @@
               class:is-off={station.powerState === 0}
               class:is-unknown={station.powerState === -1}
             >
-              <div class="card-header">
+              <div class="card-content">
                 <div class="station-identity">
                   {#if editingAddress === station.address}
                     <div class="rename-container">
@@ -292,47 +292,33 @@
                     <div class="name-row">
                       <h3 title={station.name}>{station.name}</h3>
                       <button class="icon-btn ghost" on:click={() => startRename(station)} title="Rename">
-                        <Edit2 size={14} />
+                        <Edit2 size={12} />
                       </button>
                     </div>
-                    {#if station.name !== station.originalName}
-                      <span class="original-name">{station.originalName}</span>
-                    {/if}
-                  {/if}
-                </div>
-
-                <div class="status-badge" class:on={station.powerState===1} class:off={station.powerState===0}>
-                  {#if station.powerState === 1}
-                    On
-                  {:else if station.powerState === 0}
-                    Off
-                  {:else}
-                    Unknown
+                    <div class="info-row">
+                      <Bluetooth size={12} class="text-muted" />
+                      <span class="address">{station.address}</span>
+                      {#if station.name !== station.originalName}
+                        <span class="original-name">({station.originalName})</span>
+                      {/if}
+                    </div>
                   {/if}
                 </div>
               </div>
 
-              <div class="card-body">
-                <div class="info-row">
-                  <Bluetooth size={14} class="text-muted" />
-                  <span class="address">{station.address}</span>
-                </div>
-              </div>
-
-              <div class="card-footer">
+              <div class="card-action">
                 <button
-                  class="btn btn-full toggle-btn"
+                  class="btn btn-sm toggle-btn"
                   class:btn-success={station.powerState === 0}
                   class:btn-danger={station.powerState === 1}
                   on:click={() => togglePower(station)}
                   disabled={station.powerState === -1 || operationInProgress[station.address] || isLoading || isBulkLoading}
                 >
                   {#if operationInProgress[station.address]}
-                      <Loader2 class="spin" size={18} />
-                      <span>Working...</span>
+                      <Loader2 class="spin" size={16} />
                   {:else}
-                      <Power size={18} />
-                      <span>Turn {station.powerState === 0 ? 'On' : 'Off'}</span>
+                      <Power size={16} />
+                      <span>{station.powerState === 0 ? 'Turn On' : 'Turn Off'}</span>
                   {/if}
                 </button>
               </div>
@@ -348,14 +334,14 @@
      {:else if isLoading}
          <div class="loading-state">
             <Loader2 class="spin" size={32} color="var(--color-primary)" />
-            <p>Scanning for devices...</p>
+            <p>Scanning...</p>
          </div>
     {/if}
   </main>
 
   <div class="status-bar">
     <div class="status-content">
-      <Activity size={14} />
+      <Activity size={12} />
       <span>{statusMessage}</span>
     </div>
   </div>
@@ -370,21 +356,13 @@
   }
 
   header {
-    padding: var(--spacing-lg);
+    padding: var(--spacing-md);
     background-color: var(--bg-surface);
     border-bottom: 1px solid var(--color-border);
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-md);
+    gap: var(--spacing-sm);
     box-shadow: var(--shadow-sm);
-  }
-
-  @media (min-width: 600px) {
-    header {
-      flex-direction: row;
-      align-items: center;
-      justify-content: space-between;
-    }
   }
 
   .title-group {
@@ -401,7 +379,7 @@
   }
 
   h1 {
-    font-size: 1.5rem;
+    font-size: 1.1rem;
     font-weight: 700;
     margin: 0;
     color: var(--text-primary);
@@ -423,12 +401,13 @@
 
   main {
     flex: 1;
-    padding: var(--spacing-lg);
+    padding: var(--spacing-md);
     overflow-y: auto;
     position: relative;
-    max-width: 1200px;
+    max-width: 100%;
     margin: 0 auto;
     width: 100%;
+    box-sizing: border-box;
   }
 
   /* Buttons */
@@ -437,14 +416,19 @@
     align-items: center;
     justify-content: center;
     gap: var(--spacing-sm);
-    padding: 0.5rem 1rem;
+    padding: 0.4rem 0.8rem;
     border: none;
     border-radius: var(--radius-md);
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     font-weight: 600;
     cursor: pointer;
     transition: var(--transition);
     color: white;
+  }
+
+  .btn-sm {
+      padding: 0.3rem 0.6rem;
+      font-size: 0.8rem;
   }
 
   .btn:disabled {
@@ -474,13 +458,11 @@
   .btn-danger { background-color: var(--color-danger); }
   .btn-danger:hover:not(:disabled) { filter: brightness(1.1); }
 
-  .btn-full { width: 100%; }
-
   .icon-btn {
     background: none;
     border: none;
     cursor: pointer;
-    padding: 4px;
+    padding: 2px;
     border-radius: var(--radius-sm);
     display: flex;
     align-items: center;
@@ -499,47 +481,50 @@
 
   /* Station Grid */
   .station-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: var(--spacing-md);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
   }
 
   .station-card {
     background-color: var(--bg-surface);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-md);
     border: 1px solid var(--color-border);
     display: flex;
-    flex-direction: column;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--spacing-sm) var(--spacing-md);
     overflow: hidden;
     transition: var(--transition);
     position: relative;
+    min-height: 60px;
   }
 
   .station-card:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-sm);
     border-color: var(--text-muted);
   }
 
   /* Status indicators on card border */
-  .station-card.is-on { border-left: 4px solid var(--color-success); }
-  .station-card.is-off { border-left: 4px solid var(--color-danger); }
-  .station-card.is-unknown { border-left: 4px solid var(--text-muted); }
+  .station-card.is-on { border-left: 3px solid var(--color-success); }
+  .station-card.is-off { border-left: 3px solid var(--color-danger); }
+  .station-card.is-unknown { border-left: 3px solid var(--text-muted); }
 
-  .card-header {
-    padding: var(--spacing-md);
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    border-bottom: 1px solid rgba(255,255,255,0.05);
+  .card-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding-right: var(--spacing-md);
+      overflow: hidden;
   }
 
   .station-identity {
-    flex: 1;
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
     gap: 2px;
+    width: 100%;
   }
 
   .name-row {
@@ -550,45 +535,30 @@
 
   .name-row h3 {
     margin: 0;
-    font-size: 1.1rem;
+    font-size: 0.95rem;
     color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .original-name {
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     color: var(--text-muted);
     font-style: italic;
-  }
-
-  .status-badge {
-    font-size: 0.75rem;
-    font-weight: 700;
-    padding: 2px 8px;
-    border-radius: 12px;
-    background-color: var(--bg-app);
-    color: var(--text-muted);
-    text-transform: uppercase;
-  }
-
-  .status-badge.on { background-color: rgba(34, 197, 94, 0.2); color: var(--color-success); }
-  .status-badge.off { background-color: rgba(239, 68, 68, 0.2); color: var(--color-danger); }
-
-  .card-body {
-    padding: var(--spacing-md);
-    flex: 1;
+    margin-left: 4px;
   }
 
   .info-row {
     display: flex;
     align-items: center;
-    gap: var(--spacing-sm);
+    gap: 4px;
     color: var(--text-secondary);
-    font-size: 0.9rem;
+    font-size: 0.8rem;
   }
 
-  .card-footer {
-    padding: var(--spacing-md);
-    background-color: rgba(0,0,0,0.1);
+  .card-action {
+      flex-shrink: 0;
   }
 
   /* Renaming */
@@ -603,10 +573,10 @@
     background-color: var(--bg-input);
     border: 1px solid var(--color-primary);
     color: white;
-    padding: 4px 8px;
+    padding: 2px 6px;
     border-radius: var(--radius-sm);
     font-family: inherit;
-    font-size: 1rem;
+    font-size: 0.9rem;
     width: 100%;
     outline: none;
   }
@@ -618,7 +588,7 @@
     align-items: center;
     justify-content: center;
     height: 100%;
-    min-height: 200px;
+    min-height: 150px;
     color: var(--text-muted);
     gap: var(--spacing-md);
   }
@@ -627,11 +597,12 @@
   .status-bar {
     background-color: var(--bg-surface);
     border-top: 1px solid var(--color-border);
-    padding: var(--spacing-xs) var(--spacing-md);
-    font-size: 0.8rem;
+    padding: 2px var(--spacing-md);
+    font-size: 0.75rem;
     color: var(--text-secondary);
     display: flex;
     justify-content: center;
+    min-height: 24px;
   }
 
   .status-content {

@@ -9,5 +9,12 @@
   "author": {
     "name": "FlameInTheDark",
     "email": "viktorfreedom@gmail.com"
+  },
+  "info": {
+    "companyName": "FlameInTheDark",
+    "productName": "Lighthouse Control",
+    "productVersion": "1.0.0",
+    "copyright": "Copyright © 2024 FlameInTheDark",
+    "comments": "Control Valve Lighthouse base stations v2.0 power state"
   }
 }

@@ -1,0 +1,72 @@
+name: Build and Release Artifacts
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Windows App & Installer
+    runs-on: windows-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Check for Release Tag
+        id: check_tag
+        shell: bash
+        run: |
+          git fetch --tags
+          TAG=$(git describe --tags --exact-match HEAD 2>/dev/null || echo "")
+          if [ -z "$TAG" ]; then
+            echo "No tag found on this commit. Skipping build."
+            echo "skipped=true" >> $GITHUB_OUTPUT
+          else
+            echo "Found tag: $TAG"
+            echo "skipped=false" >> $GITHUB_OUTPUT
+            echo "tag_name=$TAG" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Go
+        if: steps.check_tag.outputs.skipped == 'false'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Setup Node.js
+        if: steps.check_tag.outputs.skipped == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Wails
+        if: steps.check_tag.outputs.skipped == 'false'
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Build
+        if: steps.check_tag.outputs.skipped == 'false'
+        run: |
+          wails build -platform windows/amd64 -nsis -trimpath -ldflags "-s -w"
+
+      - name: List Build Output
+        if: steps.check_tag.outputs.skipped == 'false'
+        run: Get-ChildItem -Recurse build/bin
+        shell: powershell
+
+      - name: Upload Release Assets
+        if: steps.check_tag.outputs.skipped == 'false'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.check_tag.outputs.tag_name }}
+          files: |
+            build/bin/lhcontrol.exe
+            build/bin/*-installer.exe

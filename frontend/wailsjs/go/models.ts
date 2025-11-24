@@ -1,4 +1,4 @@
-export namespace main {
+export namespace station {
 	
 	export class StationInfo {
 	    name: string;

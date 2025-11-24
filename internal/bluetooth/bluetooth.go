@@ -326,20 +326,50 @@ func PowerOn(station *BaseStation) error {
 	station.mutex.Lock()
 	defer station.mutex.Unlock()
 
-	if err := connectAndDiscoverInternal(station); err != nil {
-		return fmt.Errorf("failed to connect/discover before PowerOn: %w", err)
+	const maxRetries = 2
+	var err error
+
+	for i := 0; i < maxRetries; i++ {
+		if err = connectAndDiscoverInternal(station); err != nil {
+			// If connection fails, we can't proceed with this attempt.
+			// If it was a retry after a write failure, this will be the final error.
+			log.Printf("Bluetooth: connect/discover failed during PowerOn attempt %d/%d for %s: %v", i+1, maxRetries, station.Name, err)
+			if i == maxRetries-1 {
+				return fmt.Errorf("failed to connect/discover before PowerOn: %w", err)
+			}
+			// If we failed to connect, wait a bit and try again (force disconnect just in case state is weird)
+			disconnectInternal(station)
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		log.Printf("Bluetooth: Sending Power ON command to %s using WriteWithoutResponse", station.Name)
+		var n int
+		n, err = station.characteristic.WriteWithoutResponse([]byte{0x01})
+		if err != nil && strings.Contains(err.Error(), "not supported") {
+			log.Printf("Bluetooth: WriteWithoutResponse not supported for %s (%v), attempting standard Write...", station.Name, err)
+			n, err = station.characteristic.Write([]byte{0x01})
+		}
+
+		if err == nil {
+			if n != 1 {
+				// A successful write should return n=1 for one byte
+				log.Printf("Bluetooth: Warning - wrote %d bytes instead of 1 for Power ON on %s", n, station.Name)
+			}
+			// Success
+			break
+		}
+
+		log.Printf("Bluetooth: Write Power ON failed for %s: %v. Retrying...", station.Name, err)
+		disconnectInternal(station)
+		// The next iteration will try to reconnect
+		if i < maxRetries-1 {
+			time.Sleep(500 * time.Millisecond)
+		}
 	}
 
-	log.Printf("Bluetooth: Sending Power ON command to %s using WriteWithoutResponse", station.Name)
-	n, err := station.characteristic.WriteWithoutResponse([]byte{0x01})
 	if err != nil {
-		disconnectInternal(station)
-		return fmt.Errorf("failed to write Power ON command: %w", err)
-	}
-	if n != 1 {
-		// A successful write should return n=1 for one byte
-		log.Printf("Bluetooth: Warning - wrote %d bytes instead of 1 for Power ON on %s", n, station.Name)
-		// Continue anyway, but log it. Might not be fatal.
+		return fmt.Errorf("failed to write Power ON command after %d retries: %w", maxRetries, err)
 	}
 
 	time.Sleep(100 * time.Millisecond)
@@ -358,19 +388,45 @@ func PowerOff(station *BaseStation) error {
 	station.mutex.Lock()
 	defer station.mutex.Unlock()
 
-	if err := connectAndDiscoverInternal(station); err != nil {
-		return fmt.Errorf("failed to connect/discover before PowerOff: %w", err)
+	const maxRetries = 2
+	var err error
+
+	for i := 0; i < maxRetries; i++ {
+		if err = connectAndDiscoverInternal(station); err != nil {
+			log.Printf("Bluetooth: connect/discover failed during PowerOff attempt %d/%d for %s: %v", i+1, maxRetries, station.Name, err)
+			if i == maxRetries-1 {
+				return fmt.Errorf("failed to connect/discover before PowerOff: %w", err)
+			}
+			disconnectInternal(station)
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		log.Printf("Bluetooth: Sending Power OFF command to %s using WriteWithoutResponse", station.Name)
+		var n int
+		n, err = station.characteristic.WriteWithoutResponse([]byte{0x00})
+		if err != nil && strings.Contains(err.Error(), "not supported") {
+			log.Printf("Bluetooth: WriteWithoutResponse not supported for %s (%v), attempting standard Write...", station.Name, err)
+			n, err = station.characteristic.Write([]byte{0x00})
+		}
+
+		if err == nil {
+			if n != 1 {
+				log.Printf("Bluetooth: Warning - wrote %d bytes instead of 1 for Power OFF on %s", n, station.Name)
+			}
+			// Success
+			break
+		}
+
+		log.Printf("Bluetooth: Write Power OFF failed for %s: %v. Retrying...", station.Name, err)
+		disconnectInternal(station)
+		if i < maxRetries-1 {
+			time.Sleep(500 * time.Millisecond)
+		}
 	}
 
-	log.Printf("Bluetooth: Sending Power OFF command to %s using WriteWithoutResponse", station.Name)
-	n, err := station.characteristic.WriteWithoutResponse([]byte{0x00})
 	if err != nil {
-		disconnectInternal(station)
-		return fmt.Errorf("failed to write Power OFF command: %w", err)
-	}
-	if n != 1 {
-		log.Printf("Bluetooth: Warning - wrote %d bytes instead of 1 for Power OFF on %s", n, station.Name)
-		// Continue anyway, but log it.
+		return fmt.Errorf("failed to write Power OFF command after %d retries: %w", maxRetries, err)
 	}
 
 	time.Sleep(100 * time.Millisecond)

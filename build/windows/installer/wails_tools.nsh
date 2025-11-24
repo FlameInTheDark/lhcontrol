@@ -8,16 +8,16 @@
     !define INFO_PROJECTNAME "lhcontrol"
 !endif
 !ifndef INFO_COMPANYNAME
-    !define INFO_COMPANYNAME "lhcontrol"
+    !define INFO_COMPANYNAME "FlameInTheDark"
 !endif
 !ifndef INFO_PRODUCTNAME
-    !define INFO_PRODUCTNAME "lhcontrol"
+    !define INFO_PRODUCTNAME "Lighthouse Control"
 !endif
 !ifndef INFO_PRODUCTVERSION
     !define INFO_PRODUCTVERSION "1.0.0"
 !endif
 !ifndef INFO_COPYRIGHT
-    !define INFO_COPYRIGHT "Copyright........."
+    !define INFO_COPYRIGHT "Copyright © 2024 FlameInTheDark"
 !endif
 !ifndef PRODUCT_EXECUTABLE
     !define PRODUCT_EXECUTABLE "${INFO_PROJECTNAME}.exe"
@@ -158,7 +158,7 @@ RequestExecutionLevel "${REQUEST_EXECUTION_LEVEL}"
 
     ${If} ${REQUEST_EXECUTION_LEVEL} == "user"
         # If the installer is run in user level, check the user specific key exists and is not empty then webview2 is already installed
-	    ReadRegStr $0 HKCU "Software\Microsoft\EdgeUpdate\Clients{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
+	    ReadRegStr $0 HKCU "Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
         ${If} $0 != ""
             Goto ok
         ${EndIf}

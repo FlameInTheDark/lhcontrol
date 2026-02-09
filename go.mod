@@ -3,7 +3,7 @@ module lhcontrol
 go 1.24.0
 
 require (
-	github.com/gofiber/fiber/v2 v2.52.10
+	github.com/gofiber/fiber/v2 v2.52.11
 	github.com/wailsapp/wails/v2 v2.11.0
 	tinygo.org/x/bluetooth v0.13.0
 )
